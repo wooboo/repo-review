@@ -11,6 +11,17 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as McpRouteImport } from './routes/mcp'
+import { Route as ScansRouteImport } from './routes/scans'
+import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as WorktreesRouteImport } from './routes/worktrees'
+import { Route as AgentsIndexRouteImport } from './routes/agents.index'
+import { Route as AgentsRunRouteImport } from './routes/agents.$run'
+import { Route as BranchesIndexRouteImport } from './routes/branches.index'
+import { Route as BranchesIdRouteImport } from './routes/branches.$id'
+import { Route as PrsIndexRouteImport } from './routes/prs.index'
+import { Route as PrsPrRouteImport } from './routes/prs.$pr'
+import { Route as ReposIndexRouteImport } from './routes/repos.index'
+import { Route as ReposRepoRouteImport } from './routes/repos.$repo'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -22,31 +33,170 @@ const McpRoute = McpRouteImport.update({
   path: '/mcp',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ScansRoute = ScansRouteImport.update({
+  id: '/scans',
+  path: '/scans',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const WorktreesRoute = WorktreesRouteImport.update({
+  id: '/worktrees',
+  path: '/worktrees',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgentsIndexRoute = AgentsIndexRouteImport.update({
+  id: '/agents/',
+  path: '/agents/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgentsRunRoute = AgentsRunRouteImport.update({
+  id: '/agents/$run',
+  path: '/agents/$run',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BranchesIndexRoute = BranchesIndexRouteImport.update({
+  id: '/branches/',
+  path: '/branches/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BranchesIdRoute = BranchesIdRouteImport.update({
+  id: '/branches/$id',
+  path: '/branches/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PrsIndexRoute = PrsIndexRouteImport.update({
+  id: '/prs/',
+  path: '/prs/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PrsPrRoute = PrsPrRouteImport.update({
+  id: '/prs/$pr',
+  path: '/prs/$pr',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ReposIndexRoute = ReposIndexRouteImport.update({
+  id: '/repos/',
+  path: '/repos/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ReposRepoRoute = ReposRepoRouteImport.update({
+  id: '/repos/$repo',
+  path: '/repos/$repo',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/mcp': typeof McpRoute
+  '/scans': typeof ScansRoute
+  '/settings': typeof SettingsRoute
+  '/worktrees': typeof WorktreesRoute
+  '/agents/$run': typeof AgentsRunRoute
+  '/branches/$id': typeof BranchesIdRoute
+  '/prs/$pr': typeof PrsPrRoute
+  '/repos/$repo': typeof ReposRepoRoute
+  '/agents/': typeof AgentsIndexRoute
+  '/branches/': typeof BranchesIndexRoute
+  '/prs/': typeof PrsIndexRoute
+  '/repos/': typeof ReposIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/mcp': typeof McpRoute
+  '/scans': typeof ScansRoute
+  '/settings': typeof SettingsRoute
+  '/worktrees': typeof WorktreesRoute
+  '/agents/$run': typeof AgentsRunRoute
+  '/branches/$id': typeof BranchesIdRoute
+  '/prs/$pr': typeof PrsPrRoute
+  '/repos/$repo': typeof ReposRepoRoute
+  '/agents': typeof AgentsIndexRoute
+  '/branches': typeof BranchesIndexRoute
+  '/prs': typeof PrsIndexRoute
+  '/repos': typeof ReposIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/mcp': typeof McpRoute
+  '/scans': typeof ScansRoute
+  '/settings': typeof SettingsRoute
+  '/worktrees': typeof WorktreesRoute
+  '/agents/$run': typeof AgentsRunRoute
+  '/branches/$id': typeof BranchesIdRoute
+  '/prs/$pr': typeof PrsPrRoute
+  '/repos/$repo': typeof ReposRepoRoute
+  '/agents/': typeof AgentsIndexRoute
+  '/branches/': typeof BranchesIndexRoute
+  '/prs/': typeof PrsIndexRoute
+  '/repos/': typeof ReposIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/mcp'
+  fullPaths:
+    | '/'
+    | '/mcp'
+    | '/scans'
+    | '/settings'
+    | '/worktrees'
+    | '/agents/$run'
+    | '/branches/$id'
+    | '/prs/$pr'
+    | '/repos/$repo'
+    | '/agents/'
+    | '/branches/'
+    | '/prs/'
+    | '/repos/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/mcp'
-  id: '__root__' | '/' | '/mcp'
+  to:
+    | '/'
+    | '/mcp'
+    | '/scans'
+    | '/settings'
+    | '/worktrees'
+    | '/agents/$run'
+    | '/branches/$id'
+    | '/prs/$pr'
+    | '/repos/$repo'
+    | '/agents'
+    | '/branches'
+    | '/prs'
+    | '/repos'
+  id:
+    | '__root__'
+    | '/'
+    | '/mcp'
+    | '/scans'
+    | '/settings'
+    | '/worktrees'
+    | '/agents/$run'
+    | '/branches/$id'
+    | '/prs/$pr'
+    | '/repos/$repo'
+    | '/agents/'
+    | '/branches/'
+    | '/prs/'
+    | '/repos/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   McpRoute: typeof McpRoute
+  ScansRoute: typeof ScansRoute
+  SettingsRoute: typeof SettingsRoute
+  WorktreesRoute: typeof WorktreesRoute
+  AgentsRunRoute: typeof AgentsRunRoute
+  BranchesIdRoute: typeof BranchesIdRoute
+  PrsPrRoute: typeof PrsPrRoute
+  ReposRepoRoute: typeof ReposRepoRoute
+  AgentsIndexRoute: typeof AgentsIndexRoute
+  BranchesIndexRoute: typeof BranchesIndexRoute
+  PrsIndexRoute: typeof PrsIndexRoute
+  ReposIndexRoute: typeof ReposIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -65,12 +215,100 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof McpRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/scans': {
+      id: '/scans'
+      path: '/scans'
+      fullPath: '/scans'
+      preLoaderRoute: typeof ScansRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/worktrees': {
+      id: '/worktrees'
+      path: '/worktrees'
+      fullPath: '/worktrees'
+      preLoaderRoute: typeof WorktreesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/agents/': {
+      id: '/agents/'
+      path: '/agents'
+      fullPath: '/agents/'
+      preLoaderRoute: typeof AgentsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/agents/$run': {
+      id: '/agents/$run'
+      path: '/agents/$run'
+      fullPath: '/agents/$run'
+      preLoaderRoute: typeof AgentsRunRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/branches/': {
+      id: '/branches/'
+      path: '/branches'
+      fullPath: '/branches/'
+      preLoaderRoute: typeof BranchesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/branches/$id': {
+      id: '/branches/$id'
+      path: '/branches/$id'
+      fullPath: '/branches/$id'
+      preLoaderRoute: typeof BranchesIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/prs/': {
+      id: '/prs/'
+      path: '/prs'
+      fullPath: '/prs/'
+      preLoaderRoute: typeof PrsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/prs/$pr': {
+      id: '/prs/$pr'
+      path: '/prs/$pr'
+      fullPath: '/prs/$pr'
+      preLoaderRoute: typeof PrsPrRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/repos/': {
+      id: '/repos/'
+      path: '/repos'
+      fullPath: '/repos/'
+      preLoaderRoute: typeof ReposIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/repos/$repo': {
+      id: '/repos/$repo'
+      path: '/repos/$repo'
+      fullPath: '/repos/$repo'
+      preLoaderRoute: typeof ReposRepoRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   McpRoute: McpRoute,
+  ScansRoute: ScansRoute,
+  SettingsRoute: SettingsRoute,
+  WorktreesRoute: WorktreesRoute,
+  AgentsRunRoute: AgentsRunRoute,
+  BranchesIdRoute: BranchesIdRoute,
+  PrsPrRoute: PrsPrRoute,
+  ReposRepoRoute: ReposRepoRoute,
+  AgentsIndexRoute: AgentsIndexRoute,
+  BranchesIndexRoute: BranchesIndexRoute,
+  PrsIndexRoute: PrsIndexRoute,
+  ReposIndexRoute: ReposIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
