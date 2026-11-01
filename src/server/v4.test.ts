@@ -104,6 +104,8 @@ test("clone plan counts, archive restores branches/stash and dirty files, then r
     git(f.repo, "commit", "-am", "feature");
     writeFileSync(join(f.repo, "f"), "stash");
     git(f.repo, "stash", "push", "-m", "saved");
+    writeFileSync(join(f.repo, "f"), "stash two");
+    git(f.repo, "stash", "push", "-m", "saved two");
     writeFileSync(join(f.repo, "f"), "dirty");
     writeFileSync(join(f.repo, "new"), "untracked");
     writeFileSync(
@@ -118,7 +120,7 @@ test("clone plan counts, archive restores branches/stash and dirty files, then r
     expect(planned.status).toBe("planned");
     const s = planned.cloneDeletion!.summary!;
     expect(s.branches).toBe(2);
-    expect(s.stashes).toBe(1);
+    expect(s.stashes).toBe(2);
     expect(s.dirtyFiles).toBe(2);
     expect(s.unpushedBranches.map((b) => b.name)).toContain("feature");
     expect(s.ignoredKept.files).toBe(1);
@@ -137,6 +139,17 @@ test("clone plan counts, archive restores branches/stash and dirty files, then r
     expect(
       run("git", ["bundle", "list-heads", join(archive, "repo.bundle")]).out,
     ).toContain("refs/stash");
+    const heads = run("git", [
+      "bundle",
+      "list-heads",
+      join(archive, "stashes.bundle"),
+    ]).out;
+    expect(heads).toContain("refs/stashes/0");
+    expect(heads).toContain("refs/stashes/1");
+    expect(
+      git(restored, "fetch", join(archive, "stashes.bundle"), "refs/stashes/*:refs/stashes/*").code,
+    ).toBe(0);
+    expect(git(restored, "log", "-1", "--format=%s", "refs/stashes/1").out).toContain("saved");
     const tar = run("tar", ["-tzf", join(archive, "worktrees/0.tar.gz")]);
     expect(tar.code).toBe(0);
     expect(tar.out).toContain(".env");

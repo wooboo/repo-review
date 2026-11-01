@@ -6,9 +6,10 @@ import {
   writeFileSync,
   rmSync,
   statSync,
+  mkdtempSync,
 } from "node:fs";
 import { join, relative, isAbsolute, dirname } from "node:path";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { git, run, expand, worktreeRows } from "./git";
 import { readThreads } from "./threads";
@@ -314,6 +315,33 @@ export function executeCloneDeletion(
       checked(repo, "bundle", "verify", bundle);
       verify(bundle);
     }
+    // `--all` only carries refs/stash (stash@{0}); older entries live in its reflog.
+    // Bundle every entry from a throwaway repository borrowing the clone's objects,
+    // so the clone itself stays untouched for the fingerprint recheck.
+    const stashes = summary.stashes
+      ? checked(repo, "log", "-g", "--format=%H", "refs/stash")
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+      : [];
+    if (stashes.length) {
+      const tmp = mkdtempSync(join(tmpdir(), "repo-review-stash-"));
+      try {
+        checked(tmp, "init", "-q", "--bare");
+        writeFileSync(
+          join(tmp, "objects", "info", "alternates"),
+          join(common, "objects") + "\n",
+        );
+        for (const [n, sha] of stashes.entries())
+          checked(tmp, "update-ref", "refs/stashes/" + n, sha);
+        const bundle = join(archive, "stashes.bundle");
+        checked(tmp, "bundle", "create", bundle, "--all");
+        checked(tmp, "bundle", "verify", bundle);
+        verify(bundle);
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    }
     mkdirSync(join(archive, "worktrees"), { mode: 0o700 });
     for (const [i, f] of files.entries()) {
       if (!f.files.length && !f.staged && !f.unstaged) continue;
@@ -365,6 +393,7 @@ export function executeCloneDeletion(
           createdAt: item.createdAt,
           archivedAt: new Date().toISOString(),
           noRefs: !refs.trim(),
+          stashes: stashes.length,
           worktrees: files.map((f, i) => ({ index: i, path: f.path })),
           skippedIgnored: files
             .flatMap((f) => f.skipped.map((n) => join(f.path, n)))
@@ -410,7 +439,7 @@ export function executeCloneDeletion(
         quote(join(archive, "repo.bundle")) +
         " " +
         quote(repo) +
-        "; restore stash with git fetch <bundle> refs/stash:refs/stash; recreate linked worktrees using info.json, then untar worktrees/<n>.tar.gz in each checkout and apply <n>.staged.patch with git apply --index and <n>.unstaged.patch with git apply (for a ref-less repository: git init instead of clone).",
+        "; restore stashes with git fetch stashes.bundle 'refs/stashes/*:refs/stashes/*' and, from the highest number down to 0, git stash store -m restored refs/stashes/<n>; recreate linked worktrees using info.json, then untar worktrees/<n>.tar.gz in each checkout and apply <n>.staged.patch with git apply --index and <n>.unstaged.patch with git apply (for a ref-less repository: git init instead of clone).",
     };
     return result();
   } catch (e) {
