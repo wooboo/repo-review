@@ -1,19 +1,12 @@
 import { Link } from "@tanstack/react-router";
-import { ExternalLinkIcon } from "lucide-react";
+import { ExternalLinkIcon, GitBranchIcon } from "lucide-react";
 import { LandedBadge, MethodPill, Mono, Pill, RelativeTime } from "@/components/domain";
-import { EmptyState, ErrorState } from "@/components/states";
 import { branchId } from "@/lib/api/ids";
 import type { BranchHistoryItem, Landing } from "@/lib/api/types";
-import { isNotAvailableYet } from "@/lib/api/v3";
 import { repoName, shortSha } from "@/lib/format";
 import { commitUrl, landingBranches } from "@/lib/provenance";
 import { cn } from "@/lib/utils";
 import { m } from "@/messages";
-
-/** Error state of a Contract v3 view: "not available yet" while the server lacks the function. */
-export function V3Error({ error, onRetry }: { error: unknown; onRetry: () => void }) {
-  return isNotAvailableYet(error) ? <EmptyState>{m.notAvailableYet}</EmptyState> : <ErrorState error={error} onRetry={onRetry} />;
-}
 
 export function CommitLink({ repo, sha, className }: { repo: string; sha: string; className?: string }) {
   const url = commitUrl(repo, sha);
@@ -27,8 +20,9 @@ export function CommitLink({ repo, sha, className }: { repo: string; sha: string
 }
 
 /** One base commit: what landed, from which PR and branch, how it was matched, and the local branches it absorbed. */
-export function LandingRow({ repo, landing: l, liveIds }: { repo: string; landing: Landing; liveIds: ReadonlySet<string> }) {
-  const branches = landingBranches(l, liveIds);
+export function LandingRow({ repo, landing: l, liveIds, baseIds }: { repo: string; landing: Landing; liveIds: ReadonlySet<string>; baseIds: ReadonlySet<string> }) {
+  const branches = landingBranches(l, liveIds, baseIds);
+  const direct = l.method === "direct" || (!l.pullRequestId && l.via === "none");
   return (
     <li className="flex flex-col gap-1.5 p-3">
       <span className="flex items-start justify-between gap-2">
@@ -50,10 +44,12 @@ export function LandingRow({ repo, landing: l, liveIds }: { repo: string; landin
       <span className="flex flex-wrap items-center gap-1">
         {l.method !== "direct" && <MethodPill method={l.method} />}
         {l.sourceBranch && <Pill className="font-mono">{m.provenance.from(l.sourceBranch)}</Pill>}
-        <Pill t={l.via === "none" ? "warn" : "neutral"}>{l.via === "none" ? m.provenance.via.none : m.provenance.viaLabel(m.provenance.via[l.via])}</Pill>
+        {/* A direct push has no PR to resolve; "unresolved" only matters when a PR was expected. */}
+        {!direct && <Pill t={l.via === "none" ? "warn" : "neutral"}>{l.via === "none" ? m.provenance.via.none : m.provenance.viaLabel(m.provenance.via[l.via])}</Pill>}
       </span>
       {branches.length > 0 && (
-        <span className="flex flex-wrap gap-x-3 gap-y-1 text-sm">
+        <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+          <GitBranchIcon className="size-3.5 text-muted-foreground" aria-label={m.nav.branches} />
           {branches.map((b) => (
             <Link key={b.id} to="/branches/$id" params={{ id: b.id }} className="inline-flex min-h-11 items-center gap-1.5 font-mono text-xs underline-offset-4 hover:underline md:min-h-0">
               {b.name}

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { BranchHistoryItem, LandedVia } from "./api/types";
-import { anyLanding, branchLanding, commitsToReview, commitUrl, landingBranches, matchHistory, sameSha } from "./provenance";
+import { anyLanding, branchLanding, commitsToReview, commitUrl, landingBranches, matchHistory, sameSha, settled } from "./provenance";
 import { clonePathOf, canFastForward, canPrune, canPush, canSwitchToBase, countWorktrees, hasChanges, isMissing, worktreeStatus } from "./worktrees";
 
 const landed = (over: Partial<LandedVia> = {}): LandedVia => ({
@@ -27,7 +27,7 @@ describe("provenance", () => {
     const one = landed();
     expect(branchLanding({ landedVia: one, clones: [] })).toBe(one);
     const extra = landed({ extraCommits: 2 });
-    expect(branchLanding({ clones: [{ landedVia: one }, { landedVia: extra }] as never })).toBe(extra);
+    expect(branchLanding({ clones: [{ state: "pr-merged-changed", landedVia: one }, { state: "pr-merged-changed", landedVia: extra }] as never })).toBe(extra);
     expect(branchLanding({ clones: [{ landedVia: one }, { landedVia: null }] as never })).toBeNull();
     expect(branchLanding({ clones: [{ landedVia: one }, { landedVia: landed({ pullRequestId: "x!1", number: 1 }) }] as never })).toBeNull();
     expect(branchLanding({ clones: [{}] as never })).toBeNull();
@@ -45,14 +45,26 @@ describe("provenance", () => {
       "c2c2c2c 2026-10-02T10:00:00Z Tweak",
       "c1c1c1c 2026-10-01T10:00:00Z Original work",
     ];
-    expect(commitsToReview({ commits, landedVia: null })).toEqual({ commits: expect.any(Array), filtered: false });
-    expect(commitsToReview({ commits, landedVia: null }).commits).toHaveLength(3);
-    expect(commitsToReview({ commits, landedVia: landed() })).toEqual({ commits: [], filtered: true });
-    const byShas = commitsToReview({ commits, landedVia: landed({ extraCommits: 2, extraCommitShas: ["c3c3c3c999", "c2c2c2c999"] }) });
+    expect(commitsToReview({ commits, state: "pr-merged-changed", landedVia: null })).toMatchObject({ filtered: false, landed: null });
+    expect(commitsToReview({ commits, state: "pr-merged-changed", landedVia: null }).commits).toHaveLength(3);
+    expect(commitsToReview({ commits, state: "pr-merged-changed", landedVia: landed() })).toMatchObject({ commits: [], filtered: true });
+    const byShas = commitsToReview({ commits, state: "pr-merged-changed", landedVia: landed({ extraCommits: 2, extraCommitShas: ["c3c3c3c999", "c2c2c2c999"] }) });
     expect(byShas.commits.map((c) => c.subject)).toEqual(["Fix after review", "Tweak"]);
     // Unmatched SHAs (list truncated or rewritten): the newest K commits.
-    const byCount = commitsToReview({ commits, landedVia: landed({ extraCommits: 1, extraCommitShas: ["ffffff"] }) });
+    const byCount = commitsToReview({ commits, state: "pr-merged-changed", landedVia: landed({ extraCommits: 1, extraCommitShas: ["ffffff"] }) });
     expect(byCount.commits.map((c) => c.sha)).toEqual(["c3c3c3c"]);
+  });
+
+  test("extra commits on an integrated branch are settled, not shown for review", () => {
+    const extra = landed({ extraCommits: 1, extraCommitShas: ["c3c3c3c"] });
+    expect(settled(extra, false)).toBe(extra);
+    expect(settled(extra, true)).toMatchObject({ number: 12, extraCommits: 0, extraCommitShas: [] });
+    expect(settled(null, true)).toBeNull();
+    expect(commitsToReview({ commits: ["c3c3c3c 2026-10-03T10:00:00Z Fix"], state: "merged", landedVia: extra })).toMatchObject({ commits: [], filtered: true, landed: { extraCommits: 0 } });
+    // A deletable branch shows "landed via", not "+1 after".
+    expect(branchLanding({ verdict: "delete", landedVia: extra, clones: [] })?.extraCommits).toBe(0);
+    expect(anyLanding({ verdict: "delete", clones: [{ state: "merged", landedVia: extra }] as never })?.extraCommits).toBe(0);
+    expect(branchLanding({ verdict: "pr-merged-changed", landedVia: extra, clones: [] })?.extraCommits).toBe(1);
   });
 
   test("landing branches: live first, names from ids", () => {
@@ -62,6 +74,7 @@ describe("provenance", () => {
       { id: "r#alpha", name: "alpha", live: false },
       { id: "r#feat/a#b", name: "feat/a#b", live: false },
     ]);
+    expect(landingBranches({ branchIds: ["r#main", "r#feat"] }, new Set(["r#main", "r#feat"]), new Set(["r#main"])).map((b) => b.name)).toEqual(["feat"]);
   });
 
   test("commit URLs only for forge repositories", () => {
@@ -84,17 +97,13 @@ describe("provenance", () => {
 
 describe("worktrees: missing is not dirty", () => {
   const w = (over: Record<string, unknown> = {}) => ({ main: false, exists: true, dirty: false, locked: false, branch: "feat", operations: [] as string[], ...over });
-  test("v2 servers: missing derives from exists, even when the collector says dirty", () => {
+  test("missing derives from exists, even when the collector says dirty", () => {
     const gone = w({ exists: false, dirty: true });
     expect(isMissing(gone)).toBe(true);
     expect(hasChanges(gone)).toBe(false);
     expect(worktreeStatus(gone)).toBe("missing");
     expect(worktreeStatus(w({ dirty: true }))).toBe("changes");
     expect(worktreeStatus(w())).toBe("clean");
-  });
-  test("v3 servers: the missing flag wins", () => {
-    expect(isMissing(w({ missing: true }))).toBe(true);
-    expect(isMissing(w({ exists: false, missing: false }))).toBe(false);
   });
   test("counts split changes and missing", () => {
     expect(countWorktrees([w({ dirty: true }), w({ exists: false, dirty: true }), w({ exists: false }), w()])).toEqual({ changes: 1, missing: 2, clean: 1 });

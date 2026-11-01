@@ -14,7 +14,7 @@ import { q } from "@/lib/queries";
 import { prefetch, title } from "@/lib/route-helpers";
 import { cn } from "@/lib/utils";
 import { DECIDE, needsDecision } from "@/lib/verdicts";
-import { countWorktrees } from "@/lib/worktrees";
+import { isMissing } from "@/lib/worktrees";
 import { m } from "@/messages";
 
 export const Route = createFileRoute("/")({
@@ -28,10 +28,9 @@ function Attention() {
   const localOnly = useQuery(q.branches({ verdicts: ["local-only"], sort: "date", pageSize: 5 }));
   const scans = useScans();
   const flow = useActionFlow();
-  // TODO(contract-v3): v2's dashboard.dirtyWorktrees also counts missing directories and has no
-  // missing count, so both tiles are counted from the worktree list.
+  // The dashboard has no missing-worktree count, so that tile is counted from the worktree list.
   const worktrees = useQuery(q.worktrees({}));
-  const wt = useMemo(() => (worktrees.data ? countWorktrees(worktrees.data) : undefined), [worktrees.data]);
+  const missing = useMemo(() => worktrees.data?.filter(isMissing).length, [worktrees.data]);
   const d = dashboard.data;
   const deletable = d?.verdicts.delete ?? 0;
 
@@ -49,8 +48,8 @@ function Attention() {
             <Tile label={m.attention.deletable} value={d?.verdicts.delete} to="/branches" search={{ verdict: ["delete"] }} dot="bg-v-delete" />
             <Tile label={m.attention.localOnly} value={d?.verdicts["local-only"]} to="/branches" search={{ verdict: ["local-only"] }} dot="bg-v-local-only" />
             <Tile label={m.attention.needsDecision} value={d ? needsDecision(d.verdicts) : undefined} to="/branches" search={{ verdict: [...DECIDE] }} dot="bg-v-unmerged" />
-            <Tile label={m.attention.dirtyWorktrees} value={wt?.changes} to="/worktrees" search={{ status: "changes" }} dot="bg-v-check" />
-            <Tile label={m.attention.missingWorktrees} value={wt?.missing} to="/worktrees" search={{ status: "missing" }} dot="bg-destructive" />
+            <Tile label={m.attention.dirtyWorktrees} value={d?.dirtyWorktrees} to="/worktrees" search={{ status: "changes" }} dot="bg-v-check" />
+            <Tile label={m.attention.missingWorktrees} value={missing} to="/worktrees" search={{ status: "missing" }} dot="bg-destructive" />
             <Tile label={m.attention.openPrs} value={d?.openPullRequests} to="/prs" dot="bg-v-pr-open" />
             <Tile label={m.attention.running} value={d ? d.runningScans.length + d.runningAgentRuns : undefined} to="/agents" search={{ status: "running" }} className="col-span-2 sm:col-span-1" />
           </div>

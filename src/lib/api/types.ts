@@ -1,8 +1,7 @@
 /**
- * UI-facing shapes of the backend (docs/API.md). Contract v2 types come straight from the domain
- * schemas in `src/domain/model.ts`; read models without an exported schema mirror the server
- * results. Contract v3 additions are optional fields and separate types, marked TODO(contract-v3):
- * they become required once the backend implementing v3 is merged.
+ * UI-facing shapes of the backend (docs/API.md, Contracts v2 and v3). Types come straight from the
+ * domain schemas in `src/domain/model.ts`; read models without an exported schema mirror the
+ * server results.
  */
 import type {
   About,
@@ -15,69 +14,57 @@ import type {
   AgentRunInput,
   AgentTask,
   Branch as DomainBranch,
+  BranchHistoryItem,
   ChecksSummary,
   Clone as DomainClone,
   Forge,
   Host,
   JevClassification,
+  LandedVia,
+  Landing,
   PlannedAction,
-  PullRequest as DomainPullRequest,
-  PullRequestDetail as DomainPullRequestDetail,
+  PullRequest,
+  PullRequestCommit,
+  PullRequestDetail,
   Settings,
   State,
   Thread,
   Verdict,
-  Worktree as DomainWorktree,
+  Worktree,
 } from "@/domain/model";
 
-export type { About, ActionKind, ActionTarget, Agent, AgentEvent, AgentInfo, AgentRun, AgentRunInput, AgentTask, ChecksSummary, Forge, Host, PlannedAction, Settings, State, Thread, Verdict };
-
-/** TODO(contract-v3): v3 adds the "pr-merged" and "pr-merged-changed" clone states. */
-export type BranchState = State | "pr-merged" | "pr-merged-changed";
+export type {
+  About,
+  ActionKind,
+  ActionTarget,
+  Agent,
+  AgentEvent,
+  AgentInfo,
+  AgentRun,
+  AgentRunInput,
+  AgentTask,
+  BranchHistoryItem,
+  ChecksSummary,
+  Forge,
+  Host,
+  LandedVia,
+  Landing,
+  PlannedAction,
+  PullRequest,
+  PullRequestCommit,
+  PullRequestDetail,
+  Settings,
+  State,
+  Thread,
+  Verdict,
+  Worktree,
+};
 
 export type Page<T> = { items: T[]; total: number; page: number; pageSize: number };
 export type JobRef = { id: string };
 
-// ---------- Contract v3: pull-request provenance
-
-export type LandingMethod = "merge" | "squash" | "rebase" | "unknown";
-export type LandedVia = {
-  pullRequestId: string;
-  number: number;
-  url: string;
-  method: LandingMethod;
-  mergeCommitSha: string | null;
-  matchedSha: string;
-  extraCommits: number;
-  extraCommitShas: readonly string[];
-};
-export type PullRequestCommit = { sha: string; subject: string; author: string; at: string };
-export type LandingVia = "merge-commit-sha" | "message" | "trailer" | "patch-id" | "none";
-export type Landing = {
-  sha: string;
-  subject: string;
-  author: string;
-  at: string;
-  base: string;
-  pullRequestId: string | null;
-  number: number | null;
-  sourceBranch: string | null;
-  method: LandingMethod | "direct";
-  via: LandingVia;
-  /** Local branches (live or gone) that landed in this commit. */
-  branchIds: readonly string[];
-};
-export type BranchHistoryItem = {
-  host: string;
-  repo: string;
-  clonePath: string;
-  branch: string;
-  sha: string;
-  firstSeen: string;
-  lastSeen: string;
-  goneAt: string | null;
-  landedVia: LandedVia | null;
-};
+export type LandingMethod = LandedVia["method"];
+export type LandingVia = Landing["via"];
 export type LandingQuery = { repo: string; base?: string; since?: string; page: number; pageSize: number };
 export type BranchHistoryQuery = { repo?: string; gone?: boolean; page: number; pageSize: number };
 
@@ -93,13 +80,9 @@ export type RepositorySummary = {
 };
 
 export type Remote = DomainClone["remotes"][number];
-export type FileChange = DomainWorktree["files"][number];
+export type FileChange = Worktree["files"][number];
 
-// TODO(contract-v3): `missing` becomes required; until then it is derived from `exists === false`.
-export type Worktree = DomainWorktree & { missing?: boolean };
-
-// TODO(contract-v3): per-clone `landedVia` becomes required.
-export type BranchInfo = DomainBranch & { landedVia?: LandedVia | null };
+export type BranchInfo = DomainBranch;
 
 export type Clone = Omit<DomainClone, "branches" | "remoteBranches" | "worktrees"> & {
   host: string;
@@ -125,8 +108,8 @@ export type BranchGroup = {
   date: string;
   clones: BranchClone[];
   jev: Jev | null;
-  /** TODO(contract-v3): branch-level provenance when every clone agrees. */
-  landedVia?: LandedVia | null;
+  /** Branch-level provenance when every clone agrees. */
+  landedVia: LandedVia | null;
 };
 
 export type RepositoryDetail = {
@@ -188,13 +171,9 @@ export type ListInput = {
 // ---------- pull requests
 
 export type ChecksState = ChecksSummary["state"];
-export type PullRequestState = DomainPullRequest["state"];
-export type ReviewState = DomainPullRequest["review"];
-/** TODO(contract-v3): merge commit, method and commit count become required. */
-type ProvenanceFields = { mergeCommitSha?: string | null; mergeMethod?: LandingMethod | null; commitCount?: number };
-export type PullRequest = DomainPullRequest & ProvenanceFields;
-export type PullRequestFile = DomainPullRequestDetail["files"][number];
-export type PullRequestDetail = DomainPullRequestDetail & ProvenanceFields & { commits?: readonly PullRequestCommit[] };
+export type PullRequestState = PullRequest["state"];
+export type ReviewState = PullRequest["review"];
+export type PullRequestFile = PullRequestDetail["files"][number];
 export type PullRequestQuery = {
   repo?: string;
   state?: PullRequestState | "all";

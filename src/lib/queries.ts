@@ -2,7 +2,6 @@ import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useSyncExternalStore } from "react";
 import * as api from "@/lib/api/client";
 import type { AgentRunQuery, BranchHistoryQuery, LandingQuery, ListInput, LiveEvent, PlannedAction, PullRequestQuery, Verdict } from "@/lib/api/types";
-import * as v3 from "@/lib/api/v3";
 
 /** Inventory queries share the "inv" prefix so a finished scan can refresh all of them at once. */
 export const q = {
@@ -24,16 +23,10 @@ export const q = {
   agents: () => queryOptions({ queryKey: ["agents"], queryFn: api.listAgents, staleTime: 5 * 60_000 }),
   runs: (input: AgentRunQuery) => queryOptions({ queryKey: ["runs", input], queryFn: () => api.listAgentRuns(input) }),
   actions: (input: { page: number; pageSize: number }) => queryOptions({ queryKey: ["actions", input], queryFn: () => api.listActions(input) }),
-  // TODO(contract-v3): served by the v3 backend; "not available yet" until it is merged.
-  landings: (input: LandingQuery) => queryOptions({ queryKey: ["inv", "landings", input], queryFn: () => v3.listLandings(input), retry: v3Retry }),
-  history: (input: BranchHistoryQuery) => queryOptions({ queryKey: ["inv", "history", input], queryFn: () => v3.listBranchHistory(input), retry: v3Retry }),
+  landings: (input: LandingQuery) => queryOptions({ queryKey: ["inv", "landings", input], queryFn: () => api.listLandings(input) }),
+  history: (input: BranchHistoryQuery) => queryOptions({ queryKey: ["inv", "history", input], queryFn: () => api.listBranchHistory(input) }),
   job: <T>(id: string, result: (v: unknown) => T) => queryOptions({ queryKey: ["job", id], queryFn: () => api.getBackgroundJob(id, result) }),
 };
-
-/** A missing v3 function will not appear on retry. */
-function v3Retry(count: number, error: unknown) {
-  return !v3.isNotAvailableYet(error) && count < 3;
-}
 
 export const asActions = (v: unknown) => (Array.isArray(v) ? (v as PlannedAction[]) : []);
 

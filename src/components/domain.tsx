@@ -3,7 +3,7 @@ import { useState } from "react";
 import type * as React from "react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
-import type { ActionStatus, AgentRunStatus, BranchClone, BranchState, BranchGroup, ChecksSummary, LandedVia, LandingMethod, PullRequest, ReviewState, ScanStatus, Verdict } from "@/lib/api/types";
+import type { ActionStatus, AgentRunStatus, BranchClone, State, BranchGroup, ChecksSummary, LandedVia, LandingMethod, PullRequest, ReviewState, ScanStatus, Verdict } from "@/lib/api/types";
 import { divergenceWidth, formatDateTime, relativeTime, shortSha } from "@/lib/format";
 import { divergingShas, VERDICTS } from "@/lib/verdicts";
 import { cn } from "@/lib/utils";
@@ -40,7 +40,7 @@ export function VerdictBadge({ verdict, className }: { verdict: Verdict; classNa
   );
 }
 
-export function StateBadge({ state }: { state: BranchState }) {
+export function StateBadge({ state }: { state: State }) {
   const integrated = state === "merged" || state === "patch-merged" || state === "squash-merged" || state === "content-in-base" || state === "pr-merged";
   return (
     <Tooltip>

@@ -8,9 +8,13 @@ import type {
   AgentRunInput,
   AgentRunQuery,
   BranchGroup,
+  BranchHistoryItem,
+  BranchHistoryQuery,
   Dashboard,
   Job,
   JobRef,
+  Landing,
+  LandingQuery,
   ListInput,
   MergeMethod,
   Page,
@@ -158,4 +162,22 @@ export async function listAgentRuns(input: AgentRunQuery): Promise<Page<AgentRun
 
 export async function cancelAgentRun(id: string): Promise<AgentRun> {
   return server.cancelAgentRun({ data: { id } });
+}
+
+// ---------- Contract v3: pull-request provenance
+
+export async function syncPullRequests(input: { repo?: string; full?: boolean }): Promise<JobRef> {
+  return server.syncPullRequests({ data: input });
+}
+
+export async function listLandings(input: LandingQuery): Promise<Page<Landing>> {
+  return server.listLandings({ data: input });
+}
+
+export async function getCommitProvenance(input: { repo: string; sha: string }): Promise<Landing | null> {
+  return server.getCommitProvenance({ data: input });
+}
+
+export async function listBranchHistory(input: BranchHistoryQuery): Promise<Page<BranchHistoryItem>> {
+  return server.listBranchHistory({ data: input });
 }

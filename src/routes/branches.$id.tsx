@@ -119,7 +119,7 @@ function BranchPage() {
         <Section title={m.branches.perClone} id="clones">
           <div className="grid gap-3 xl:grid-cols-2">
             {b.clones.map((c) => (
-              <CloneCard key={c.host + c.path} c={c} showLanded={!landed && b.verdict !== "base"} max={Math.max(10, ...b.clones.flatMap((x) => [x.ahead, x.behind]))}
+              <CloneCard key={c.host + c.path} c={c} showLanded={!landed && b.verdict !== "base"} base={b.verdict === "base"} max={Math.max(10, ...b.clones.flatMap((x) => [x.ahead, x.behind]))}
                 onFastForward={canFastForward(c) ? () => setPlan({ kind: "fast-forward-base", targets: [{ host: c.host, repo: c.path, branch: c.name }] }) : undefined} />
             ))}
           </div>
@@ -206,8 +206,9 @@ function LandedSection({ repo, landed }: { repo: string; landed: LandedVia }) {
   );
 }
 
-function CloneCard({ c, max, showLanded, onFastForward }: { c: BranchClone; max: number; showLanded: boolean; onFastForward?: () => void }) {
-  const review = commitsToReview(c);
+function CloneCard({ c, max, showLanded, base, onFastForward }: { c: BranchClone; max: number; showLanded: boolean; base: boolean; onFastForward?: () => void }) {
+  // Base branches absorb every PR; their own commits are listed as they are.
+  const review = commitsToReview(base ? { ...c, landedVia: null } : c);
   const commits = review.commits;
   const diff = parseShortstat(c.diffstat);
   const residual = parseShortstat(c.residual);
@@ -240,7 +241,7 @@ function CloneCard({ c, max, showLanded, onFastForward }: { c: BranchClone; max:
         ...(residual ? [[m.branches.residual, <DiffStat key="rs" s={residual} />] as [string, React.ReactNode]] : []),
         ...(c.squashCommit ? [[m.branches.squash, <Mono key="sq">{shortSha(c.squashCommit)}</Mono>] as [string, React.ReactNode]] : []),
         ...(c.containedIn.length ? [[m.branches.containedIn, <span key="ci" className="flex flex-wrap gap-1">{c.containedIn.map((r) => <Pill key={r}>{r}</Pill>)}</span>] as [string, React.ReactNode]] : []),
-        ...(showLanded && c.landedVia ? [[m.provenance.title, <Link key="lv" to="/prs/$pr" params={{ pr: c.landedVia.pullRequestId }}><LandedBadge landed={c.landedVia} /></Link>] as [string, React.ReactNode]] : []),
+        ...(showLanded && review.landed ? [[m.provenance.title, <Link key="lv" to="/prs/$pr" params={{ pr: review.landed.pullRequestId }}><LandedBadge landed={review.landed} /></Link>] as [string, React.ReactNode]] : []),
       ]} />
       {onFastForward && c.base && (
         <div className="flex flex-col items-start gap-2 rounded-lg bg-muted/50 p-2 text-sm">
@@ -263,7 +264,7 @@ function CloneCard({ c, max, showLanded, onFastForward }: { c: BranchClone; max:
       )}
       <div className="flex flex-col gap-1">
         <h3 className="text-xs font-semibold text-muted-foreground uppercase">
-          {review.filtered && c.landedVia ? m.provenance.after(c.landedVia.extraCommits, c.landedVia.number) : m.branches.commits}
+          {review.landed && review.landed.extraCommits > 0 ? m.provenance.after(review.landed.extraCommits, review.landed.number) : m.branches.commits}
         </h3>
         {commits.length ? (
           <ul className="flex flex-col divide-y text-sm">
@@ -276,7 +277,7 @@ function CloneCard({ c, max, showLanded, onFastForward }: { c: BranchClone; max:
             ))}
           </ul>
         ) : (
-          <p className="text-sm text-muted-foreground">{review.filtered && c.landedVia ? m.provenance.nothingExtra(c.landedVia.number) : m.branches.noCommits}</p>
+          <p className="text-sm text-muted-foreground">{review.landed ? m.provenance.nothingExtra(review.landed.number) : m.branches.noCommits}</p>
         )}
         {!review.filtered && commits.length >= 25 && <p className="text-xs text-muted-foreground">{m.branches.commitsTruncated}</p>}
       </div>

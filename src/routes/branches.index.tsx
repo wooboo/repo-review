@@ -5,7 +5,7 @@ import { Dot, verdictBg } from "@/components/domain";
 import { FilterField, SwitchRow } from "@/components/filters/field";
 import { FilterLayout, OptionSelect, Pagination, SearchInput } from "@/components/filters/controls";
 import { PageHeader } from "@/components/page-header";
-import { HistoryRow, V3Error } from "@/components/provenance";
+import { HistoryRow } from "@/components/provenance";
 import { BranchRow, divergenceMax, RowList, usePrsByBranch } from "@/components/rows";
 import { EmptyState, ErrorState, ListSkeleton } from "@/components/states";
 import { Switch } from "@/components/ui/switch";
@@ -29,7 +29,7 @@ export const Route = createFileRoute("/branches/")({
 });
 
 const PAGE_SIZE = 50;
-const STATES: State[] = ["unmerged", "merged", "patch-merged", "squash-merged", "content-in-base", "no-base", "base"];
+const STATES: State[] = ["unmerged", "pr-merged-changed", "pr-merged", "merged", "patch-merged", "squash-merged", "content-in-base", "no-base", "base"];
 const JEV = ["delete", "archive", "keep", "finish_and_merge"] as const;
 
 function Branches() {
@@ -56,7 +56,7 @@ function Branches() {
     pageSize: PAGE_SIZE,
   };
   const branches = useQuery({ ...q.branches(input), placeholderData: keepPreviousData, enabled: !gone });
-  // TODO(contract-v3): branch history comes from the v3 backend; text search runs on the loaded page.
+  // The history list has no text filter; search runs on the loaded page.
   const history = useQuery({ ...q.history({ repo: search.repo || undefined, gone: true, page: search.page, pageSize: PAGE_SIZE }), placeholderData: keepPreviousData, enabled: gone });
   const prs = usePrsByBranch();
   // ListInput has no `jev` filter, so it is applied to the loaded page (kept until the server takes it).
@@ -91,7 +91,7 @@ function Branches() {
       >
         {gone ? (
           history.error ? (
-            <V3Error error={history.error} onRetry={() => void history.refetch()} />
+            <ErrorState error={history.error} onRetry={() => void history.refetch()} />
           ) : !history.data ? (
             <ListSkeleton />
           ) : !goneItems.length ? (

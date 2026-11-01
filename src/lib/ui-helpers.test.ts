@@ -4,7 +4,6 @@ import { divergenceWidth, formatDuration, parseCommit, parseShortstat, parseStas
 import { countVerdicts, divergingShas, groupByVerdict, needsDecision, verdictsByRepo } from "./verdicts";
 import { mergeChunks } from "./agent-events";
 import { parseBranchId, parsePullRequestId, pullRequestId } from "./api/ids";
-import { isNotAvailableYet, lookup, NotAvailableYet } from "./api/optional";
 import { allPages, paginate } from "./api/pages";
 import { parseSearchWith } from "@tanstack/react-router";
 import { stringifySearch } from "./url";
@@ -141,16 +140,6 @@ describe("ids and helpers", () => {
     const all = await allPages(async (page) => (pages.push(page), paginate(rows, page, 200)));
     expect(all).toHaveLength(450);
     expect(pages).toEqual([1, 2, 3]);
-  });
-  test("optional v3 server functions", async () => {
-    const module = { listLandings: async ({ data }: { data: { repo: string } }) => data.repo, notAFunction: 1 };
-    expect(lookup(module, "missing")).toBeUndefined();
-    expect(lookup(module, "notAFunction")).toBeUndefined();
-    expect(await lookup<{ repo: string }, string>(module, "listLandings")!({ data: { repo: "r" } })).toBe("r");
-    expect(isNotAvailableYet(new NotAvailableYet("listLandings"))).toBe(true);
-    const copied = Object.assign(new Error("x"), { name: "NotAvailableYet" });
-    expect(isNotAvailableYet(copied)).toBe(true);
-    expect(isNotAvailableYet(new Error("boom"))).toBe(false);
   });
 });
 

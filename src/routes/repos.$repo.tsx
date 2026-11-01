@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { useActionFlow } from "@/components/action-flow";
 import { FilterField } from "@/components/filters/field";
 import { OptionSelect, Pagination } from "@/components/filters/controls";
-import { LandingRow, V3Error } from "@/components/provenance";
+import { LandingRow } from "@/components/provenance";
 import { ScrollTabsList } from "@/components/scroll-tabs";
 import { SyncPrsButton } from "@/components/sync-prs";
 import { Button } from "@/components/ui/button";
@@ -131,6 +131,7 @@ function Worktrees({ repo, onPlan }: { repo: RepositoryDetail; onPlan: (p: PlanI
 function Landings({ repo, search, update }: { repo: RepositoryDetail; search: RepoSearch; update: (patch: Partial<RepoSearch>) => void }) {
   const bases = [...new Set(repo.clones.flatMap((c) => c.bases.map(stripRemote)))].sort();
   const live = useMemo(() => new Set(repo.branches.map((b) => b.id)), [repo.branches]);
+  const baseIds = useMemo(() => new Set(repo.branches.filter((b) => b.verdict === "base").map((b) => b.id)), [repo.branches]);
   const landings = useQuery({ ...q.landings({ repo: repo.key, base: search.base || undefined, page: search.page, pageSize: LANDINGS_PAGE }), placeholderData: keepPreviousData });
   return (
     <>
@@ -140,7 +141,7 @@ function Landings({ repo, search, update }: { repo: RepositoryDetail; search: Re
         </FilterField>
       )}
       {landings.error ? (
-        <V3Error error={landings.error} onRetry={() => void landings.refetch()} />
+        <ErrorState error={landings.error} onRetry={() => void landings.refetch()} />
       ) : !landings.data ? (
         <ListSkeleton />
       ) : !landings.data.items.length ? (
@@ -148,7 +149,7 @@ function Landings({ repo, search, update }: { repo: RepositoryDetail; search: Re
       ) : (
         <>
           <RowList className={cn(landings.isPlaceholderData && "opacity-60 transition-opacity")}>
-            {landings.data.items.map((l) => <LandingRow key={l.sha} repo={repo.key} landing={l} liveIds={live} />)}
+            {landings.data.items.map((l) => <LandingRow key={l.sha} repo={repo.key} landing={l} liveIds={live} baseIds={baseIds} />)}
           </RowList>
           <Pagination page={search.page} total={landings.data.total} pageSize={LANDINGS_PAGE} onPage={(page) => update({ page })} />
         </>

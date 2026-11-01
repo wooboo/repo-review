@@ -1,5 +1,5 @@
 /** Every user-visible string of the UI. English only; keep strings here, not inline in components. */
-import type { ActionKind, ActionStatus, AgentEventKind, AgentRunStatus, AgentTask, BranchState, ChecksState, JevRecommendation, LandingMethod, LandingVia, MergeMethod, PullRequestState, ReviewState, ScanStatus, Verdict, WorktreeMode } from "@/lib/api/types";
+import type { ActionKind, ActionStatus, AgentEventKind, AgentRunStatus, AgentTask, State, ChecksState, JevRecommendation, LandingMethod, LandingVia, MergeMethod, PullRequestState, ReviewState, ScanStatus, Verdict, WorktreeMode } from "@/lib/api/types";
 import type { WorktreeStatus } from "@/lib/worktrees";
 
 const plural = (n: number, one: string, many: string) => `${n.toLocaleString("en")} ${n === 1 ? one : many}`;
@@ -39,7 +39,6 @@ export const m = {
   nextPage: "Next page",
   results: (n: number) => plural(n, "result", "results"),
   openExternal: "Open on the forge",
-  notAvailableYet: "Not available yet: this server does not provide it. It arrives with the next backend update.",
 
   // navigation
   nav: {
@@ -94,7 +93,7 @@ export const m = {
     "content-in-base": "Content in base",
     unmerged: "Unmerged",
     "no-base": "No base",
-  } satisfies Record<BranchState, string>,
+  } satisfies Record<State, string>,
   stateHelp: {
     base: "This is a base branch.",
     merged: "An ancestor of the base.",
@@ -105,7 +104,7 @@ export const m = {
     "content-in-base": "Every changed file already has this content in the base.",
     unmerged: "Has changes that are not in the base.",
     "no-base": "No base branch was found.",
-  } satisfies Record<BranchState, string>,
+  } satisfies Record<State, string>,
 
   // flags
   flag: {
