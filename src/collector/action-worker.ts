@@ -1,3 +1,4 @@
+import { executeCloneDeletion, type CloneDeletion } from "./delete-clone";
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { Action, PlannedAction } from "../domain/model";
@@ -6,6 +7,7 @@ import { worktree } from "./analyze";
 import { readThreads } from "./threads";
 import { activeStatus } from "../domain/logic";
 export type WorkerAction = PlannedAction & {
+  cloneDeletion?: CloneDeletion;
   sha: string;
   base: string;
   baseSha: string;
@@ -19,6 +21,8 @@ export function executeExtra(
   apply: boolean,
   options: { t3?: boolean; cwds?: string[] } = {},
 ) {
+  if (item.kind === "delete-clone")
+    return executeCloneDeletion(item, apply, options);
   const result = (status: PlannedAction["status"], reason: string) => ({
     ...item,
     status,

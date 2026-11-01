@@ -38,6 +38,13 @@ export class ForgeService {
   private queue: Promise<unknown> = Promise.resolve();
   syncRequests = 0;
   syncActive = false;
+  forgetRepository(repo: string) {
+    const host = repo.split("/")[0],
+      path = "/repos/" + repo.slice(host.length + 1);
+    for (const key of this.etags.keys())
+      if (key.startsWith(host + path + "/") || key === host + path)
+        this.etags.delete(key);
+  }
   private readonly etags = new Map<string, { etag: string; value: unknown }>();
   constructor(
     private readonly config: readonly Forge[],

@@ -375,6 +375,7 @@ export const m = {
   // actions
   actions: {
     kind: {
+      "delete-clone": "Delete clone",
       "delete-branch": "Delete branch",
       "archive-and-delete": "Archive & delete",
       "switch-to-base": "Switch to base",
@@ -386,6 +387,7 @@ export const m = {
     status: { planned: "Will run", skipped: "Skipped", blocked: "Blocked", running: "Running", done: "Done", failed: "Failed" } satisfies Record<ActionStatus, string>,
     planning: "Checking every clone on its host…",
     planTitle: {
+      "delete-clone": "Delete clone",
       "delete-branch": "Review before deleting",
       "archive-and-delete": "Review before archiving",
       "switch-to-base": "Review before switching",
@@ -395,6 +397,7 @@ export const m = {
       "set-remote-url": "Review the remote change",
     } satisfies Record<ActionKind, string>,
     hint: {
+      "delete-clone": "Delete clone",
       "delete-branch": "Deletes the local branch and its clean worktrees on every clone. Every step is re-checked on the host just before it runs.",
       "archive-and-delete": "Pushes the branch as archive/<date>/<name> to its forge, verifies it, then deletes it locally.",
       "switch-to-base": "Switches the main checkout from the merged branch to its base, so the branch can be deleted. Needs a clean checkout; a checkout holding the base is detached first.",
@@ -408,7 +411,8 @@ export const m = {
     notRun: (n: number) => `${plural(n, "action", "actions")} will not run`,
     confirm: (kind: ActionKind, n: number) =>
       ({
-        "delete-branch": `Delete ${plural(n, "branch", "branches")}`,
+        "delete-clone": "Delete clone",
+      "delete-branch": `Delete ${plural(n, "branch", "branches")}`,
         "archive-and-delete": `Archive & delete ${plural(n, "branch", "branches")}`,
         "switch-to-base": `Switch ${plural(n, "checkout", "checkouts")}`,
         "prune-worktree": `Prune ${plural(n, "entry", "entries")}`,

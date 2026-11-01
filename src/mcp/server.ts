@@ -1,3 +1,4 @@
+import { RepositoryDeletionInput, ApplyActionsInput } from "../domain/model";
 import {
   LandingListInput,
   CommitProvenanceInput,
@@ -13,6 +14,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { Schema } from "effect";
 import {
+  SettingsUpdate,
   ListInput,
   IdInput,
   ScanInput,
@@ -62,7 +64,9 @@ export const toolSchemas = {
   }),
   get_pull_request: IdInput,
   plan_cleanup: ListInput,
-  apply_actions: Schema.Struct({ ids: Schema.Array(Schema.String) }),
+  apply_actions: ApplyActionsInput,
+  plan_repository_deletion: RepositoryDeletionInput,
+  list_deleted_repositories: empty,
   delete_branch: Action,
   create_pull_request: CreatePullRequestInput,
   merge_pull_request: MergePullRequestInput,
@@ -74,6 +78,7 @@ export const toolSchemas = {
   }),
   list_agent_runs: AgentListInput,
   get_settings: empty,
+  update_settings: SettingsUpdate,
   update_scan_roots: Schema.Struct({
     host: Schema.String,
     roots: Schema.Array(Schema.String),
@@ -115,9 +120,11 @@ export async function callTool(
     case "list_hosts":
       decode(empty);
       return app.settings().hosts;
+    case "update_settings":
+      return app.updateSettings(decode(SettingsUpdate));
     case "get_settings":
       decode(empty);
-      return app.settings();
+      return app.settingsView();
     case "update_scan_roots": {
       const v = decode(toolSchemas.update_scan_roots);
       const s = app.settings();
@@ -153,10 +160,22 @@ export async function callTool(
       return startJob(app, "plan-actions", () =>
         app.planActions({ kind: "delete-branch", filter: decode(ListInput) }),
       );
-    case "apply_actions":
-      return startJob(app, "apply-actions", () =>
-        app.applyActions(decode(toolSchemas.apply_actions).ids),
+    case "plan_repository_deletion": {
+      const v = decode(RepositoryDeletionInput);
+      return startJob(app, "repository-deletion-plan", () =>
+        app.planRepositoryDeletion(v),
       );
+    }
+    case "list_deleted_repositories":
+      decode(empty);
+      return app.listDeletedRepositories();
+    case "apply_actions": {
+      const v = decode(ApplyActionsInput);
+      app.validateDeletionConfirmation(v.ids, v.confirm);
+      return startJob(app, "apply-actions", () =>
+        app.applyActions(v.ids, v.confirm),
+      );
+    }
     case "list_actions":
       return app.listActions(decode(ActionListInput));
     case "delete_branch": {

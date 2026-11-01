@@ -1,3 +1,4 @@
+import { RepositoryDeletionInput, ApplyActionsInput } from "../domain/model";
 import {
   LandingListInput,
   CommitProvenanceInput,
@@ -12,7 +13,7 @@ import {
   ListInput,
   IdInput,
   ScanInput,
-  Settings,
+  SettingsUpdate,
   PullRequestListInput,
   CreatePullRequestInput,
   MergePullRequestInput,
@@ -32,7 +33,7 @@ import { describe, classify } from "./classify";
 const valid = <S extends Schema.ConstraintDecoder<unknown>>(s: S) =>
   Schema.toStandardSchemaV1(s);
 export const getDashboard = createServerFn({ method: "GET" }).handler(() =>
-  withApp((a) => a.dashboard()),
+  withApp((a) => a.dashboardView()),
 );
 export const listRepositories = createServerFn({ method: "GET" })
   .validator(valid(ListInput))
@@ -59,10 +60,10 @@ export const listScans = createServerFn({ method: "GET" }).handler(() =>
   withApp((a) => a.listScans()),
 );
 export const getSettings = createServerFn({ method: "GET" }).handler(() =>
-  withApp((a) => a.settings()),
+  withApp((a) => a.settingsView()),
 );
 export const updateSettings = createServerFn({ method: "POST" })
-  .validator(valid(Settings))
+  .validator(valid(SettingsUpdate))
   .handler(({ data }) => withApp((a) => a.updateSettings(data)));
 export const planCleanup = createServerFn({ method: "POST" })
   .validator(valid(ListInput))
@@ -70,10 +71,15 @@ export const planCleanup = createServerFn({ method: "POST" })
     withApp((a) => startJob(a, "cleanup-plan", () => a.planCleanup(data))),
   );
 export const applyActions = createServerFn({ method: "POST" })
-  .validator(valid(Schema.Struct({ ids: Schema.Array(Schema.String) })))
+  .validator(valid(ApplyActionsInput))
   .handler(({ data }) =>
-    withApp((a) =>
-      startJob(a, "apply-actions", () => a.applyActions(data.ids)),
+    withApp(
+      (a) => (
+        a.validateDeletionConfirmation(data.ids, data.confirm),
+        startJob(a, "apply-actions", () =>
+          a.applyActions(data.ids, data.confirm),
+        )
+      ),
     ),
   );
 export const planActions = createServerFn({ method: "POST" })
@@ -170,3 +176,16 @@ export const syncPullRequests = createServerFn({ method: "POST" })
       startJob(a, "sync-pull-requests", () => a.syncPullRequests(data), data),
     ),
   );
+
+export const planRepositoryDeletion = createServerFn({ method: "POST" })
+  .validator(valid(RepositoryDeletionInput))
+  .handler(({ data }) =>
+    withApp((a) =>
+      startJob(a, "repository-deletion-plan", () =>
+        a.planRepositoryDeletion(data),
+      ),
+    ),
+  );
+export const listDeletedRepositories = createServerFn({
+  method: "GET",
+}).handler(() => withApp((a) => a.listDeletedRepositories()));

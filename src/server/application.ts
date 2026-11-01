@@ -1,3 +1,5 @@
+import { resolveJevKey, settingsView } from "./jev-key";
+import type { SettingsUpdate } from "../domain/model";
 import { resumeSyncJobs, startJob } from "./jobs";
 import { rebuildProvenance, pageItems } from "./provenance";
 import type { LandedVia, Landing, BranchHistoryItem } from "../domain/model";
@@ -29,7 +31,7 @@ import {
   type ForgeBudget,
 } from "./forge-budget";
 import { ForgeService } from "./forge";
-export type StoredClone = Clone & { host: string };
+export type StoredClone = Clone & { host: string; id: string };
 export type Job = {
   id: string;
   status: "queued" | "running" | "done" | "failed" | "cancelled";
@@ -258,8 +260,15 @@ export function makeApplication(path?: string) {
       return work;
     },
     settings,
-    updateSettings(value: Settings) {
-      const valid = Schema.decodeUnknownSync(Settings)(value);
+    settingsView: () => settingsView(settings()),
+    updateSettings(value: SettingsUpdate) {
+      const jev = { ...settings().jev };
+      for (const field of ["apiKey", "apiKeyCommand"] as const) {
+        const next = value.jev?.[field];
+        if (next === null) delete jev[field];
+        else if (next !== undefined) jev[field] = next;
+      }
+      const valid = Schema.decodeUnknownSync(Settings)({ ...value, jev });
       if (new Set(valid.hosts.map((h) => h.id)).size !== valid.hosts.length)
         throw new SettingsError({ message: "Duplicate host id" });
       if (
@@ -273,7 +282,7 @@ export function makeApplication(path?: string) {
           message: "Forge request reserve must be a nonnegative integer",
         });
       db.put("settings", "main", valid);
-      return valid;
+      return settingsView(valid);
     },
     listRepositories(input: ListInput = {}) {
       const selected = clones().filter(
@@ -399,7 +408,14 @@ export function makeApplication(path?: string) {
         input,
       );
     },
-    dashboard() {
+    async dashboardView() {
+      return api.dashboard(Boolean((await resolveJevKey(settings())).key));
+    },
+    dashboard(
+      jevEnabled = Boolean(
+        settings().jev?.apiKey || process.env.TYPESAFE_API_KEY,
+      ),
+    ) {
       const branches = branchRows();
       return {
         forgeBudgets: [...budgets.budgets.values()],
@@ -417,7 +433,7 @@ export function makeApplication(path?: string) {
           db
             .list<Job>("scan")
             .sort((a, b) => b.started.localeCompare(a.started))[0] ?? null,
-        jevEnabled: Boolean(process.env.TYPESAFE_API_KEY),
+        jevEnabled,
         repositories: new Set(clones().map((c) => c.key)).size,
         clones: clones().length,
         branches: branches.length,
@@ -569,8 +585,22 @@ export function makeApplication(path?: string) {
     planActions(input: typeof PlanActionsInput.Type) {
       return actions.planActions(api, input);
     },
-    applyActions(ids: readonly string[]) {
-      return actions.applyActions(api, ids);
+    planRepositoryDeletion(input: {
+      repositoryId: string;
+      cloneIds?: readonly string[];
+    }) {
+      return actions.planRepositoryDeletion(api, input);
+    },
+    listDeletedRepositories() {
+      return db.list<import("../domain/model").DeletedRepository>(
+        "deleted_repository",
+      );
+    },
+    validateDeletionConfirmation(ids: readonly string[], confirm?: string) {
+      actions.validateDeletionConfirmation(api, ids, confirm);
+    },
+    applyActions(ids: readonly string[], confirm?: string) {
+      return actions.applyActions(api, ids, confirm);
     },
     reindexBranches() {
       for (const b of branchRows())

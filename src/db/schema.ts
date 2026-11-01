@@ -121,3 +121,5 @@ export const pullRequestCommits = sqliteTable(
     index("pr_commits_sha_idx").on(t.sha),
   ],
 );
+
+export const deletedRepositories = entity("deleted_repositories");

@@ -1,6 +1,14 @@
 import { DbError } from "../server/errors";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
+import {
+  chmodSync,
+  openSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  unlinkSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
@@ -9,6 +17,7 @@ import { Context, Effect, Layer } from "effect";
 import * as tables from "./schema";
 import { emitChange } from "../server/events";
 const kinds: Record<string, typeof tables.clones> = {
+  deleted_repository: tables.deletedRepositories,
   branch_history: tables.branchHistory,
   provenance: tables.provenance,
   landing: tables.landings,
@@ -35,6 +44,17 @@ export function openRepository(
   path = process.env.DATABASE_PATH ?? "./data/repo-review.db",
 ) {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
+  if (path !== ":memory:") {
+    closeSync(openSync(path, "a", 0o600));
+    chmodSync(path, 0o600);
+    for (const suffix of ["-wal", "-shm"])
+      if (existsSync(path + suffix)) chmodSync(path + suffix, 0o600);
+    if (process.env.BACKUP_DIR && existsSync(process.env.BACKUP_DIR))
+      for (const name of readdirSync(process.env.BACKUP_DIR)) {
+        if (/^repo-review-.*\.db$/.test(name))
+          chmodSync(join(process.env.BACKUP_DIR, name), 0o600);
+      }
+  }
   const sqlite = new Database(path);
   sqlite.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;");
   const db = drizzle(sqlite);
@@ -141,7 +161,8 @@ export function openRepository(
       const repo = String(v?.repoKey ?? v?.repo ?? v?.key ?? "");
       const row = {
         repositoryId:
-          kind !== "repository" && api.get("repository", repo)
+          !["repository", "action", "deleted_repository"].includes(kind) &&
+          api.get("repository", repo)
             ? "repository:" + repo
             : null,
         cloneId: typeof v?.cloneId === "string" ? "clone:" + v.cloneId : null,
@@ -323,6 +344,108 @@ export function openRepository(
       });
       emitChange({ type: "inventory", id: host });
     },
+    purgeClone(
+      repo: string,
+      cloneId: string,
+      archive: { host: string; path: string; archivePath: string },
+      name: string,
+    ) {
+      sqlite.transaction(() => {
+        // Detach the durable audit before cascades remove the inventory.
+        sqlite
+          .query(
+            "UPDATE actions SET repository_id=NULL,clone_id=NULL,branch_id=NULL,worktree_id=NULL WHERE repo=?",
+          )
+          .run(repo);
+        sqlite
+          .query(
+            "DELETE FROM branch_history WHERE repo=? AND host=? AND clone_path=?",
+          )
+          .run(repo, archive.host, archive.path);
+        sqlite.query("DELETE FROM clones WHERE id=?").run("clone:" + cloneId);
+        const previous = api.get<import("../domain/model").DeletedRepository>(
+          "deleted_repository",
+          repo,
+        );
+        const archived = [...(previous?.clones ?? []), archive];
+        api.put("deleted_repository", repo, {
+          id: repo,
+          name,
+          deletedAt: new Date().toISOString(),
+          clones: archived,
+        });
+        if (
+          !api
+            .list<import("../domain/model").Clone>("clone")
+            .some((c) => c.key === repo)
+        ) {
+          for (const r of sqlite
+            .query("SELECT id,json FROM classifications")
+            .all() as { id: string; json: string }[]) {
+            if (String(JSON.parse(r.json).id ?? "").startsWith(repo + "#"))
+              sqlite.query("DELETE FROM classifications WHERE id=?").run(r.id);
+          }
+          sqlite.query("DELETE FROM actions WHERE repo=? AND json_extract(json, '$.kind') != 'delete-clone'").run(repo);
+          const runIds = api
+            .list<{ id: string; repo: string }>("agent")
+            .filter((r) => r.repo === repo)
+            .map((r) => r.id);
+          for (const r of sqlite
+            .query("SELECT id,json FROM agent_run_events")
+            .all() as { id: string; json: string }[]) {
+            if (runIds.includes(JSON.parse(r.json).runId))
+              sqlite.query("DELETE FROM agent_run_events WHERE id=?").run(r.id);
+          }
+          // Explicit purge list includes caches stored without inventory foreign keys.
+          for (const tableName of [
+            "worktree_files",
+            "branch_clones",
+            "remote_branches",
+            "worktrees",
+            "stashes",
+            "branches",
+            "branch_history",
+            "landings",
+            "provenance",
+            "pull_requests",
+            "descriptions",
+            "classifications",
+            "agent_runs",
+            "agent_run_events",
+          ]) {
+            sqlite
+              .query(
+                "DELETE FROM " + tableName + " WHERE repo=? OR repository_id=?",
+              )
+              .run(repo, "repository:" + repo);
+          }
+          for (const row of sqlite
+            .query("SELECT id,json FROM settings")
+            .all() as { id: string; json: string }[]) {
+            if (
+              row.id.includes(repo) &&
+              !row.id.startsWith("settings:forge-budget:")
+            )
+              sqlite.query("DELETE FROM settings WHERE id=?").run(row.id);
+          }
+          sqlite
+            .query("DELETE FROM repositories WHERE id=?")
+            .run("repository:" + repo);
+          sqlite
+            .query(
+              "UPDATE deleted_repositories SET repository_id=NULL,repo='' WHERE id=?",
+            )
+            .run("deleted_repository:" + repo);
+        }
+      })();
+      for (const type of [
+        "inventory",
+        "pull-requests",
+        "actions",
+        "repositories",
+      ] as const)
+        emitChange({ type, id: repo });
+    },
     backup(dir: string) {
       mkdirSync(dir, { recursive: true });
       const destination = join(
@@ -333,11 +456,14 @@ export function openRepository(
           crypto.randomUUID() +
           ".db",
       );
+      closeSync(openSync(destination, "wx", 0o600));
       sqlite.query("VACUUM INTO ?").run(destination);
+      chmodSync(destination, 0o600);
       const copies = readdirSync(dir)
         .filter((p) => /^repo-review-.*\.db$/.test(p))
         .sort()
         .reverse();
+      for (const p of copies) chmodSync(join(dir, p), 0o600);
       for (const p of copies.slice(14)) unlinkSync(join(dir, p));
       return destination;
     },
