@@ -22,6 +22,7 @@ export async function planActions(
     : (() => {
         const filter = {
           ...input.filter,
+          includeMuted: input.filter?.includeMuted ?? true,
           ...(input.kind === "delete-branch"
             ? { verdict: "delete" as const }
             : {}),

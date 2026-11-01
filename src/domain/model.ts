@@ -32,6 +32,7 @@ export const Host = Schema.Struct({
 });
 export type Host = typeof Host.Type;
 export const Forge = Schema.Struct({
+  owners: Schema.optional(Schema.Array(Schema.String)),
   host: Schema.String,
   kind: Schema.Literals(["github", "forgejo"]),
   requestReserve: Schema.optional(Schema.Number),
@@ -301,7 +302,16 @@ export const ScanInput = Schema.Struct({
   fetch: Schema.Boolean,
 });
 export const IdInput = Schema.Struct({ id: Schema.String });
+export const VisibilityInput = Schema.Struct({
+  includeMuted: Schema.optional(Schema.Boolean),
+  mine: Schema.optional(Schema.Boolean),
+});
+export const SetRepositoryMutedInput = Schema.Struct({
+  repositoryId: Schema.String,
+  muted: Schema.Boolean,
+});
 export const ListInput = Schema.Struct({
+  ...VisibilityInput.fields,
   text: Schema.optional(Schema.String),
   host: Schema.optional(Schema.String),
   repo: Schema.optional(Schema.String),
@@ -353,6 +363,7 @@ export const ChecksSummary = Schema.Struct({
 });
 export type ChecksSummary = typeof ChecksSummary.Type;
 export const PullRequest = Schema.Struct({
+  mine: Schema.Boolean,
   id: Schema.String,
   repo: Schema.String,
   forge: Schema.Literals(["github", "forgejo"]),
@@ -425,6 +436,7 @@ export const PageInput = Schema.Struct({
   pageSize: Schema.optional(Schema.Number),
 });
 export const PullRequestListInput = Schema.Struct({
+  ...VisibilityInput.fields,
   checks: Schema.optional(
     Schema.Literals(["success", "failure", "pending", "none"]),
   ),
@@ -576,6 +588,7 @@ export const JevClassification = Schema.Struct({
 export type JevClassification = typeof JevClassification.Type;
 
 export const LandingListInput = Schema.Struct({
+  ...VisibilityInput.fields,
   ...PageInput.fields,
   repo: Schema.String,
   base: Schema.optional(Schema.String),
@@ -586,6 +599,7 @@ export const CommitProvenanceInput = Schema.Struct({
   sha: Schema.String,
 });
 export const BranchHistoryInput = Schema.Struct({
+  ...VisibilityInput.fields,
   text: Schema.optional(Schema.String),
   ...PageInput.fields,
   repo: Schema.optional(Schema.String),

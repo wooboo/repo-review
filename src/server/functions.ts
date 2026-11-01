@@ -1,5 +1,6 @@
 import { RepositoryDeletionInput, ApplyActionsInput } from "../domain/model";
 import {
+  SetRepositoryMutedInput,
   LandingListInput,
   CommitProvenanceInput,
   BranchHistoryInput,
@@ -189,3 +190,6 @@ export const planRepositoryDeletion = createServerFn({ method: "POST" })
 export const listDeletedRepositories = createServerFn({
   method: "GET",
 }).handler(() => withApp((a) => a.listDeletedRepositories()));
+export const setRepositoryMuted = createServerFn({ method: "POST" })
+  .validator(valid(SetRepositoryMutedInput))
+  .handler(({ data }) => withApp((a) => a.setRepositoryMuted(data)));

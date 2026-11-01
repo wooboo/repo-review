@@ -203,6 +203,7 @@ test("partial clone purge retains PRs, final purge removes references across eve
     ]);
     app.db.put("classification", "test", { id: key + "#feature", value: {} });
     app.db.put("settings", "pr-sync:" + key, "watermark");
+    app.db.put("settings", "muted-repositories", [key, "other/repo"]);
     app.db.put("settings", "pr-commits:" + key + "!1:sha", []);
     app.db.put("action", "test", {
       repoKey: key,
@@ -216,6 +217,7 @@ test("partial clone purge retains PRs, final purge removes references across eve
     };
     app.db.purgeClone(key, "local:" + f.repo, archive, clone.name);
     expect(app.db.get("pull_request", "test")).toBeDefined();
+    expect(app.db.get("settings", "muted-repositories")).toContain(key);
     app.db.purgeClone(
       key,
       "local:" + join(f.root, "second"),
@@ -225,6 +227,7 @@ test("partial clone purge retains PRs, final purge removes references across eve
     expect(app.db.get("repository", key)).toBeUndefined();
     expect(app.db.get("action", "test")).toBeDefined();
     expect(app.listDeletedRepositories()).toHaveLength(1);
+    expect(app.db.get("settings", "muted-repositories")).toEqual(["other/repo"]);
     const sql = new Database(path, { readonly: true });
     for (const { name } of sql
       .query(

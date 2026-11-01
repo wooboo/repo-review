@@ -93,8 +93,11 @@ export function makeApplication(path?: string) {
   );
   let forgeService: ForgeService | undefined,
     forgeConfig = "";
-  const clones = () =>
-    db.list<StoredClone>("clone").map((c) => ({
+  const clones = (input?: { includeMuted?: boolean; mine?: boolean }) =>
+    (input
+      ? db.visibleList<StoredClone>("clone", input)
+      : db.list<StoredClone>("clone")
+    ).map((c) => ({
       ...c,
       worktrees: c.worktrees.map((w) => ({
         ...w,
@@ -284,8 +287,19 @@ export function makeApplication(path?: string) {
       db.put("settings", "main", valid);
       return settingsView(valid);
     },
+    setRepositoryMuted(input: { repositoryId: string; muted: boolean }) {
+      if (!db.get("repository", input.repositoryId))
+        throw new prs.NotFound({ message: "Repository missing" });
+      const ids = new Set(
+        db.get<string[]>("settings", "muted-repositories") ?? [],
+      );
+      if (input.muted) ids.add(input.repositoryId);
+      else ids.delete(input.repositoryId);
+      db.put("settings", "muted-repositories", [...ids]);
+      return { repositoryId: input.repositoryId, muted: input.muted };
+    },
     listRepositories(input: ListInput = {}) {
-      const selected = clones().filter(
+      const selected = clones(input).filter(
         (c) => !input.host || c.host === input.host,
       );
       const keys = [...new Set(selected.map((c) => c.key))];
@@ -304,6 +318,7 @@ export function makeApplication(path?: string) {
                 };
               }>("description")
               .find((d) => d.key === key)?.about ?? null,
+          ...db.repositoryFlags(key),
           id: key,
           key,
           name: key.split("/").at(-1) ?? key,
@@ -358,15 +373,20 @@ export function makeApplication(path?: string) {
               };
             }>("description")
             .find((d) => d.key === id)?.about ?? null,
+        ...db.repositoryFlags(id),
         key: id,
         clones: selected,
         branches: branchRows().filter((b) => b.repo === id),
       };
     },
     searchBranches(input: ListInput = {}) {
+      const visible = new Set(
+        db.visibleList<{ key: string }>("repository", input).map((r) => r.key),
+      );
       return paged(
         branchRows().filter(
           (b) =>
+            visible.has(b.repo) &&
             (!input.repo || b.repo === input.repo) &&
             (!input.host || b.clones.some((c) => c.host === input.host)) &&
             (!input.verdict || b.verdict === input.verdict) &&
@@ -385,7 +405,7 @@ export function makeApplication(path?: string) {
     },
     listWorktrees(input: ListInput = {}) {
       return paged(
-        clones()
+        clones(input)
           .filter(
             (c) =>
               (!input.host || c.host === input.host) &&
@@ -416,17 +436,24 @@ export function makeApplication(path?: string) {
         settings().jev?.apiKey || process.env.TYPESAFE_API_KEY,
       ),
     ) {
-      const branches = branchRows();
+      const visibleClones = clones({});
+      const visible = new Set(visibleClones.map((c) => c.key));
+      const branches = branchRows().filter((b) => visible.has(b.repo));
       return {
+        mutedRepositories: new Set(
+          clones()
+            .filter((c) => db.repositoryFlags(c.key).muted)
+            .map((c) => c.key),
+        ).size,
         forgeBudgets: [...budgets.budgets.values()],
-        missingWorktrees: clones()
+        missingWorktrees: visibleClones
           .flatMap((c) => c.worktrees)
           .filter((w) => w.missing).length,
         openPullRequests: db
-          .list<PullRequest>("pull_request")
+          .visibleList<PullRequest>("pull_request")
           .filter((p) => p.state === "open").length,
         runningAgentRuns: db
-          .list<{ status: string }>("agent")
+          .visibleList<{ status: string }>("agent")
           .filter((r) => r.status === "running" || r.status === "queued")
           .length,
         lastScan:
@@ -434,8 +461,8 @@ export function makeApplication(path?: string) {
             .list<Job>("scan")
             .sort((a, b) => b.started.localeCompare(a.started))[0] ?? null,
         jevEnabled,
-        repositories: new Set(clones().map((c) => c.key)).size,
-        clones: clones().length,
+        repositories: visible.size,
+        clones: visibleClones.length,
         branches: branches.length,
         verdicts: Object.fromEntries(
           [...new Set(branches.map((b) => b.verdict))].map((v) => [
@@ -443,7 +470,7 @@ export function makeApplication(path?: string) {
             branches.filter((b) => b.verdict === v).length,
           ]),
         ),
-        dirtyWorktrees: clones()
+        dirtyWorktrees: visibleClones
           .flatMap((c) => c.worktrees)
           .filter((w) => w.exists && w.dirty).length,
         runningScans: db
@@ -523,6 +550,7 @@ export function makeApplication(path?: string) {
                 db.replaceHost(host.id, resolved);
                 for (const key of new Set(resolved.map((c) => c.key)))
                   if (
+                    !db.repositoryFlags(key).muted &&
                     settings().forges.some((f) => key.startsWith(f.host + "/"))
                   ) {
                     try {
@@ -580,7 +608,10 @@ export function makeApplication(path?: string) {
       return db.list<Job>("scan");
     },
     planCleanup(input: ListInput = {}) {
-      return actions.planActions(api, { kind: "delete-branch", filter: input });
+      return actions.planActions(api, {
+        kind: "delete-branch",
+        filter: { ...input, includeMuted: input.includeMuted ?? true },
+      });
     },
     planActions(input: typeof PlanActionsInput.Type) {
       return actions.planActions(api, input);
@@ -612,7 +643,7 @@ export function makeApplication(path?: string) {
       const since =
         input.since ?? new Date(Date.now() - 180 * 86400000).toISOString();
       const rows = db
-        .list<Landing & { repo: string }>("landing")
+        .visibleList<Landing & { repo: string }>("landing", input)
         .filter(
           (l) =>
             l.repo === input.repo &&
@@ -637,7 +668,7 @@ export function makeApplication(path?: string) {
     ) {
       return pageItems(
         db
-          .list<BranchHistoryItem>("branch_history")
+          .visibleList<BranchHistoryItem>("branch_history", input)
           .filter(
             (h) =>
               (!input.repo || h.repo === input.repo) &&
@@ -670,6 +701,7 @@ export function makeApplication(path?: string) {
         items: page.items.map((p) =>
           Schema.decodeUnknownSync(PullRequest)({
             ...p,
+            mine: db.pullRequestMine(p.repo, p.author),
             mergeCommitSha: p.mergeCommitSha ?? null,
             mergeMethod: p.mergeMethod ?? null,
             commitCount: p.commitCount ?? 0,
