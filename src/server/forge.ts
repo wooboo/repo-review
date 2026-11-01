@@ -1,5 +1,36 @@
 import { ForgeUnavailable, ForgeRejected, NotFound } from "./pull-requests";
-import { spawnSync } from "node:child_process";
+const tokenCache = new Map<string, { until: number; value: Promise<string> }>();
+async function commandToken(host: string, command: string) {
+  const key = host + "\0" + command,
+    cached = tokenCache.get(key);
+  if (cached && cached.until > Date.now()) return cached.value;
+  const value = (async () => {
+    const p = Bun.spawn(["sh", "-c", command], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const timer = setTimeout(() => p.kill(), 15000);
+    try {
+      const [out, , code] = await Promise.all([
+        new Response(p.stdout).text(),
+        new Response(p.stderr).text(),
+        p.exited,
+      ]);
+      if (code !== 0)
+        throw new ForgeUnavailable({ message: "Token command failed" });
+      return out.trim();
+    } finally {
+      clearTimeout(timer);
+    }
+  })();
+  tokenCache.set(key, { until: Date.now() + 600000, value });
+  try {
+    return await value;
+  } catch (e) {
+    tokenCache.delete(key);
+    throw e;
+  }
+}
 import type { Forge, Clone } from "../domain/model";
 import { normalizeUrl } from "../domain/logic";
 export class ForgeService {
@@ -15,13 +46,7 @@ export class ForgeService {
     if (!f) throw new ForgeUnavailable({ message: "Forge not configured" });
     let token = f.tokenEnv ? process.env[f.tokenEnv] : undefined;
     if (f.tokenCommand) {
-      const r = spawnSync("sh", ["-c", f.tokenCommand], {
-        encoding: "utf8",
-        timeout: 15000,
-      });
-      if (r.status !== 0)
-        throw new ForgeUnavailable({ message: "Token command failed" });
-      token = r.stdout.trim();
+      token = await commandToken(f.host, f.tokenCommand);
     }
     const base =
       f.kind === "github"
@@ -62,16 +87,30 @@ export class ForgeService {
         ? null
         : response.json();
   }
-  async listPullRequests(key: string) {
+  async listPullRequests(key: string, since?: string) {
     const [host, ...parts] = key.split("/");
     const repo = parts.join("/");
     const rows: unknown[] = [];
-    for (let page = 1; page <= 100; page++) {
+    const sort =
+      this.config.find((f) => f.host === host)?.kind === "forgejo"
+        ? "recentupdate"
+        : "updated";
+    for (let page = 1; ; page++) {
       const r = (await this.request(
         host,
-        `/repos/${repo}/pulls?state=all&per_page=100&limit=100&page=${page}`,
+        `/repos/${repo}/pulls?state=all&sort=${sort}&direction=desc&per_page=100&limit=100&page=${page}`,
       )) as unknown[];
-      rows.push(...r);
+      rows.push(
+        ...r.filter(
+          (p) =>
+            !since || String((p as { updated_at: string }).updated_at) >= since,
+        ),
+      );
+      if (
+        since &&
+        r.some((p) => String((p as { updated_at: string }).updated_at) < since)
+      )
+        break;
       if (r.length < 100) break;
     }
     return rows;

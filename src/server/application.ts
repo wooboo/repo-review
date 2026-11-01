@@ -1,3 +1,5 @@
+import { rebuildProvenance, pageItems } from "./provenance";
+import type { LandedVia, Landing, BranchHistoryItem } from "../domain/model";
 import { subsystemLayers } from "./services";
 import { cancelAllRuns } from "./agents";
 import * as actions from "./actions";
@@ -13,7 +15,12 @@ import { openRepository } from "../db/repository";
 import { Snapshot, Settings, PlannedAction } from "../domain/model";
 import type { Clone, Host, ListInput } from "../domain/model";
 import { searchParams } from "../domain/model";
-import { verdict, activeStatus } from "../domain/logic";
+import {
+  verdict,
+  activeStatus,
+  integrated,
+  landedState,
+} from "../domain/logic";
 import { runHost } from "./hosts";
 import { ForgeService } from "./forge";
 export type StoredClone = Clone & { host: string };
@@ -91,6 +98,38 @@ export function makeApplication(path?: string) {
           value: import("../domain/model").JevClassification;
         }>("classification")
       : [];
+    const provenance = new Map(
+      db
+        .list<{
+          host: string;
+          path: string;
+          name: string;
+          sha: string;
+          landedVia: LandedVia | null;
+        }>("provenance")
+        .map((p) => [
+          JSON.stringify([p.host, p.path, p.name, p.sha]),
+          p.landedVia,
+        ]),
+    );
+    const decorate = (
+      clone: StoredClone,
+      branch: Clone["branches"][number],
+    ) => {
+      const landedVia =
+        provenance.get(
+          JSON.stringify([clone.host, clone.path, branch.name, branch.sha]),
+        ) ?? null;
+      return {
+        ...branch,
+        landedVia,
+        commits:
+          landedVia?.extraCommits && !integrated(branch.state)
+            ? landedVia.extraCommitShas
+            : branch.commits,
+        state: landedState(branch.state, landedVia),
+      };
+    };
     const groups = new Map<
       string,
       { clone: StoredClone; branch: Clone["branches"][number] }[]
@@ -99,7 +138,7 @@ export function makeApplication(path?: string) {
       for (const branch of clone.branches) {
         const key = clone.key + "#" + branch.name;
         const group = groups.get(key) ?? [];
-        group.push({ clone, branch });
+        group.push({ clone, branch: decorate(clone, branch) });
         groups.set(key, group);
       }
     return [...groups].map(([id, rows]) => {
@@ -119,6 +158,17 @@ export function makeApplication(path?: string) {
           ),
       }));
       return {
+        landedVia: rows.every(
+          (r) =>
+            r.branch.landedVia?.pullRequestId ===
+              rows[0].branch.landedVia?.pullRequestId &&
+            r.branch.landedVia?.matchedSha ===
+              rows[0].branch.landedVia?.matchedSha &&
+            r.branch.landedVia?.extraCommitShas.join() ===
+              rows[0].branch.landedVia?.extraCommitShas.join(),
+        )
+          ? (rows[0].branch.landedVia ?? null)
+          : null,
         jev: classifications.find((c) => c.id === id)?.value ?? null,
         id,
         name: rows[0].branch.name,
@@ -213,6 +263,35 @@ export function makeApplication(path?: string) {
       );
     },
     getRepository(id: string) {
+      const links = new Map(
+        db
+          .list<{
+            host: string;
+            path: string;
+            name: string;
+            sha: string;
+            landedVia: LandedVia | null;
+          }>("provenance")
+          .map((p) => [
+            JSON.stringify([p.host, p.path, p.name, p.sha]),
+            p.landedVia,
+          ]),
+      );
+      const selected = clones()
+        .filter((c) => c.key === id)
+        .map((c) => ({
+          ...c,
+          remoteBranches: c.remoteBranches.map((b) => {
+            const landedVia =
+              links.get(JSON.stringify([c.host, c.path, b.name, b.sha])) ??
+              null;
+            return {
+              ...b,
+              landedVia,
+              state: landedState(b.state, landedVia),
+            };
+          }),
+        }));
       return {
         about:
           db
@@ -227,7 +306,7 @@ export function makeApplication(path?: string) {
             }>("description")
             .find((d) => d.key === id)?.about ?? null,
         key: id,
-        clones: clones().filter((c) => c.key === id),
+        clones: selected,
         branches: branchRows().filter((b) => b.repo === id),
       };
     },
@@ -296,7 +375,7 @@ export function makeApplication(path?: string) {
         ),
         dirtyWorktrees: clones()
           .flatMap((c) => c.worktrees)
-          .filter((w) => w.dirty).length,
+          .filter((w) => w.exists && w.dirty).length,
         runningScans: db
           .list<Job>("scan")
           .filter((j) => ["running", "queued"].includes(j.status)),
@@ -373,8 +452,9 @@ export function makeApplication(path?: string) {
                       await api.refreshPullRequests(key);
                     } catch {
                       job.events.push({ type: "forge-unavailable", repo: key });
+                      await rebuildProvenance(api, key);
                     }
-                  }
+                  } else await rebuildProvenance(api, key);
                 job.events.push({
                   type: "host-complete",
                   host: host.id,
@@ -412,6 +492,58 @@ export function makeApplication(path?: string) {
     applyActions(ids: readonly string[]) {
       return actions.applyActions(api, ids);
     },
+    reindexBranches() {
+      for (const b of branchRows())
+        db.put("branch", b.id, { ...b, state: b.clones[0]?.state ?? null });
+    },
+    listLandings(
+      input: typeof import("../domain/model").LandingListInput.Type,
+    ) {
+      const since =
+        input.since ?? new Date(Date.now() - 180 * 86400000).toISOString();
+      const rows = db
+        .list<Landing & { repo: string }>("landing")
+        .filter(
+          (l) =>
+            l.repo === input.repo &&
+            (!input.base || l.base === input.base) &&
+            l.at >= since,
+        )
+        .sort((a, b) => b.at.localeCompare(a.at));
+      return pageItems(
+        [...new Map(rows.map((l) => [l.sha, l])).values()],
+        input,
+      );
+    },
+    getCommitProvenance(input: { repo: string; sha: string }) {
+      return (
+        db
+          .list<Landing & { repo: string }>("landing")
+          .find((l) => l.repo === input.repo && l.sha === input.sha) ?? null
+      );
+    },
+    listBranchHistory(
+      input: typeof import("../domain/model").BranchHistoryInput.Type = {},
+    ) {
+      return pageItems(
+        db
+          .list<BranchHistoryItem>("branch_history")
+          .filter(
+            (h) =>
+              (!input.repo || h.repo === input.repo) &&
+              (input.gone === undefined || Boolean(h.goneAt) === input.gone),
+          )
+          .sort((a, b) => b.lastSeen.localeCompare(a.lastSeen)),
+        input,
+      );
+    },
+    async syncPullRequests(input: { repo?: string; full?: boolean } = {}) {
+      return prs.refreshPullRequests(
+        api,
+        input.repo,
+        !!input.repo && input.full,
+      );
+    },
     listPullRequests(
       input: typeof import("../domain/model").PullRequestListInput.Type = {},
     ) {
@@ -421,7 +553,14 @@ export function makeApplication(path?: string) {
       });
       return {
         ...page,
-        items: page.items.map((p) => Schema.decodeUnknownSync(PullRequest)(p)),
+        items: page.items.map((p) =>
+          Schema.decodeUnknownSync(PullRequest)({
+            ...p,
+            mergeCommitSha: p.mergeCommitSha ?? null,
+            mergeMethod: p.mergeMethod ?? null,
+            commitCount: p.commitCount ?? 0,
+          }),
+        ),
       };
     },
     getPullRequest(id: string) {

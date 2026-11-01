@@ -9,6 +9,9 @@ import { Context, Effect, Layer } from "effect";
 import * as tables from "./schema";
 import { emitChange } from "../server/events";
 const kinds: Record<string, typeof tables.clones> = {
+  branch_history: tables.branchHistory,
+  provenance: tables.provenance,
+  landing: tables.landings,
   repository: tables.repositories,
   clone: tables.clones,
   branch: tables.branches,
@@ -46,6 +49,31 @@ export function openRepository(
     return t;
   };
   const api = {
+    commits(id: string): import("../domain/model").PullRequestCommit[] {
+      return sqlite
+        .query(
+          "SELECT sha, subject, author, at FROM pull_request_commits WHERE pr_id=? ORDER BY position",
+        )
+        .all(
+          "pull_request:" + id,
+        ) as import("../domain/model").PullRequestCommit[];
+    },
+    putCommits(
+      id: string,
+      commits: readonly import("../domain/model").PullRequestCommit[],
+    ) {
+      sqlite.transaction(() => {
+        sqlite
+          .query("DELETE FROM pull_request_commits WHERE pr_id=?")
+          .run("pull_request:" + id);
+        const insert = sqlite.query(
+          "INSERT INTO pull_request_commits VALUES (?,?,?,?,?,?)",
+        );
+        commits.forEach((c, i) =>
+          insert.run("pull_request:" + id, c.sha, i, c.subject, c.author, c.at),
+        );
+      })();
+    },
     get<T>(kind: string, id: string): T | undefined {
       const t = table(kind),
         r = db
@@ -125,15 +153,45 @@ export function openRepository(
         status: typeof v?.status === "string" ? v.status : null,
         state: typeof v?.state === "string" ? v.state : null,
         name: String(v?.name ?? v?.title ?? ""),
+        number: typeof v.number === "number" ? v.number : null,
+        headRef: typeof v.head === "string" ? v.head : null,
+        headSha: typeof v.headSha === "string" ? v.headSha : null,
+        mergeCommitSha:
+          typeof v.mergeCommitSha === "string" ? v.mergeCommitSha : null,
+        mergeMethod: typeof v.mergeMethod === "string" ? v.mergeMethod : null,
+        base: typeof v.base === "string" ? v.base : null,
+        mergedAt: typeof v.mergedAt === "string" ? v.mergedAt : null,
+        verdict: typeof v.verdict === "string" ? v.verdict : null,
+        lastCommitAt: String(v.date ?? ""),
+        stale: v.stale == null ? null : Number(v.stale),
+        dirty: v.dirty == null ? null : Number(v.dirty),
+        localOnly: v.localOnly == null ? null : Number(v.localOnly),
         json: JSON.stringify(value),
         updated: String(
-          v?.createdAt ?? v?.startedAt ?? new Date().toISOString(),
+          v?.updatedAt ??
+            v?.createdAt ??
+            v?.startedAt ??
+            new Date().toISOString(),
         ),
       };
       db.insert(t)
         .values(row)
         .onConflictDoUpdate({ target: t.id, set: row })
         .run();
+      if (kind === "branch_history")
+        sqlite
+          .query(
+            "UPDATE branch_history SET clone_path=?,branch=?,sha=?,first_seen=?,last_seen=?,gone_at=? WHERE id=?",
+          )
+          .run(
+            String(v.clonePath),
+            String(v.branch),
+            String(v.sha),
+            String(v.firstSeen),
+            String(v.lastSeen),
+            v.goneAt == null ? null : String(v.goneAt),
+            row.id,
+          );
       const type =
         kind === "scan"
           ? "scan"
@@ -146,6 +204,42 @@ export function openRepository(
     },
     replaceHost(host: string, clones: readonly { path: string }[]) {
       db.transaction(() => {
+        const now = new Date().toISOString();
+        const seen = new Set<string>();
+        for (const value of clones) {
+          const c = value as import("../domain/model").Clone;
+          for (const b of c.branches) {
+            const id = JSON.stringify([host, c.path, b.name, b.sha]);
+            seen.add(id);
+            const old = api.get<import("../domain/model").BranchHistoryItem>(
+              "branch_history",
+              id,
+            );
+            api.put("branch_history", id, {
+              host,
+              repo: c.key,
+              clonePath: c.path,
+              branch: b.name,
+              sha: b.sha,
+              firstSeen: old?.firstSeen ?? now,
+              lastSeen: now,
+              goneAt: null,
+              landedVia: old?.landedVia ?? null,
+            });
+          }
+        }
+        for (const old of api.list<import("../domain/model").BranchHistoryItem>(
+          "branch_history",
+        )) {
+          const id = JSON.stringify([
+            old.host,
+            old.clonePath,
+            old.branch,
+            old.sha,
+          ]);
+          if (old.host === host && !seen.has(id) && !old.goneAt)
+            api.put("branch_history", id, { ...old, goneAt: now });
+        }
         for (const kind of [
           "worktree_file",
           "branch_clone",

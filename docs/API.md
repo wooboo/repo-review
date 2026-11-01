@@ -295,3 +295,23 @@ MCP gains `list_landings`, `get_commit_provenance`, `list_branch_history`, `sync
 - A missing worktree directory is `missing`, not `dirty`; dashboard "dirty worktrees" counts only real changes.
 - Queried fields are real columns: branches (verdict, state, last commit at, stale, dirty, local-only, repo,
   name), pull_requests (repo, number, state, head ref, head sha, merge commit sha, base, updated at, merged at).
+
+### v3 implementation and upgrade
+
+Contract differences: none. `syncPullRequests` accepts optional `full: boolean`; a full
+sync requires `repo`. `refreshPullRequests` remains the incremental compatibility
+alias. Both server functions return jobs, and scans sync the configured repositories
+after collecting each host. PR list reads use only SQLite.
+
+The v3 migration preserves existing PR rows and settings. Scan again to populate
+branch projections, history, and the 180-day landing cache, then run a full PR sync
+to backfill commit lists. A failed sync does not advance its `updated_at` watermark;
+retries include records at the watermark. Branch disappearance never removes PRs.
+Landing and history reads use the last completed scan/sync's persisted evidence.
+History is keyed by host, clone path, branch name and observed SHA; moving a branch
+marks the previous observed SHA gone, and seeing that tuple again clears `goneAt`.
+
+Cleanup obtains fresh PR state and commit membership from the store at both plan
+and apply time. The worker independently verifies the captured branch tip, base,
+worktree and activity checks before accepting that evidence. Merge methods remain
+`unknown` when neither clone objects nor forge metadata establish the ancestry.

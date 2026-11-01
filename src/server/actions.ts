@@ -103,6 +103,32 @@ export async function runPlanned(
     app.db.put("action", action.id, blocked);
     return Schema.decodeUnknownSync(PlannedAction)(blocked);
   }
+  if (action.deletion) {
+    const landed = app
+      .getBranch(action.branchId ?? "")
+      ?.clones.find(
+        (c) => c.host === action.target.host && c.path === action.target.repo,
+      )?.landedVia;
+    const pr = landed
+      ? app.db.get<import("../domain/model").PullRequest>(
+          "pull_request",
+          landed.pullRequestId,
+        )
+      : undefined;
+    action = {
+      ...action,
+      deletion: {
+        ...action.deletion,
+        prEvidence: pr
+          ? {
+              id: pr.id,
+              state: pr.state,
+              commits: [pr.headSha, ...app.db.commits(pr.id).map((c) => c.sha)],
+            }
+          : undefined,
+      },
+    };
+  }
   let result: PlannedAction | undefined;
   await runHost(
     host,

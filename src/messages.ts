@@ -86,6 +86,8 @@ export const m = {
     base: "Base",
     merged: "Merged",
     "patch-merged": "Patch-merged",
+    "pr-merged": "PR merged",
+    "pr-merged-changed": "Changes after PR merge",
     "squash-merged": "Squash-merged",
     "content-in-base": "Content in base",
     unmerged: "Unmerged",
@@ -94,6 +96,8 @@ export const m = {
   stateHelp: {
     base: "This is a base branch.",
     merged: "An ancestor of the base.",
+    "pr-merged": "This tip is a commit of a merged pull request.",
+    "pr-merged-changed": "Commits added after a merged pull request.",
     "patch-merged": "Every commit has an equivalent in the base (rebase or cherry-pick).",
     "squash-merged": "Squashed into one base commit.",
     "content-in-base": "Every changed file already has this content in the base.",

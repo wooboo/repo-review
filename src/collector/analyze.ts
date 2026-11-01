@@ -71,7 +71,7 @@ export function worktree(
     submodules: exists
       ? out(path, "submodule", "status").split("\n").filter(Boolean)
       : [],
-    dirty: total > 0 || status.code !== 0,
+    dirty: exists && (total > 0 || status.code !== 0),
     files,
     total,
     staged,

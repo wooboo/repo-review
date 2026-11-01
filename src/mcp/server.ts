@@ -1,3 +1,9 @@
+import {
+  LandingListInput,
+  CommitProvenanceInput,
+  BranchHistoryInput,
+  SyncPullRequestsInput,
+} from "../domain/model";
 import { startJob, getJob } from "../server/jobs";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
@@ -29,6 +35,10 @@ import {
 import { withApp, type ApplicationApi } from "../server/application";
 const empty = Schema.Struct({});
 export const toolSchemas = {
+  list_landings: LandingListInput,
+  get_commit_provenance: CommitProvenanceInput,
+  list_branch_history: BranchHistoryInput,
+  sync_pull_requests: SyncPullRequestsInput,
   list_hosts: empty,
   start_scan: ScanInput,
   get_scan: IdInput,
@@ -86,6 +96,17 @@ export async function callTool(
   const decode = <S extends Schema.ConstraintDecoder<unknown>>(s: S) =>
     Schema.decodeUnknownSync(s)(input);
   switch (name) {
+    case "list_landings":
+      return app.listLandings(decode(LandingListInput));
+    case "get_commit_provenance":
+      return app.getCommitProvenance(decode(CommitProvenanceInput));
+    case "list_branch_history":
+      return app.listBranchHistory(decode(BranchHistoryInput));
+    case "sync_pull_requests":
+      return startJob(app, "sync-pull-requests", () =>
+        app.syncPullRequests(decode(SyncPullRequestsInput)),
+      );
+
     case "list_hosts":
       decode(empty);
       return app.settings().hosts;

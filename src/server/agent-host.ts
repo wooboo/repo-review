@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import type { Host } from "../domain/model";
 import { AgentError } from "./errors";
 const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
@@ -16,7 +15,7 @@ export function sshCommand(host: Host, args: string[]) {
     args.map(quote).join(" "),
   ];
 }
-export function prepareRemote(
+export async function prepareRemote(
   host: Host,
   input: {
     repo: string;
@@ -27,17 +26,27 @@ export function prepareRemote(
     branch: string;
   },
 ) {
-  const source = `import {spawnSync} from 'node:child_process';import {mkdirSync,realpathSync} from 'node:fs';import {homedir} from 'node:os';import {join} from 'node:path';const v=JSON.parse(process.argv[1]);const git=(...args)=>{const r=spawnSync('git',['-C',v.repo,...args],{encoding:'utf8'});if(r.status!==0)throw Error('Remote git preflight refused');return r.stdout.trim();};let cwd=v.cwd;if(v.worktree==='new'){const root=v.root.startsWith('~/')?join(homedir(),v.root.slice(2)):v.root;mkdirSync(root,{recursive:true});cwd=join(root,v.id);git('worktree','add','-b','agent/'+v.id,cwd,v.branch);}else if(v.worktree==='existing'){cwd=realpathSync(cwd);if(!git('worktree','list','--porcelain').split('\\n').includes('worktree '+cwd))throw Error('Remote worktree no longer registered');}console.log(JSON.stringify({cwd}));`;
+  const source = `import {mkdirSync,realpathSync} from 'node:fs';import {homedir} from 'node:os';import {join} from 'node:path';const v=JSON.parse(process.argv[1]);const git=async(...args)=>{const p=Bun.spawn(['git','-C',v.repo,...args],{stdout:'pipe',stderr:'pipe'});const [out,,code]=await Promise.all([new Response(p.stdout).text(),new Response(p.stderr).text(),p.exited]);if(code!==0)throw Error('Remote git preflight refused');return out.trim();};let cwd=v.cwd;if(v.worktree==='new'){const root=v.root.startsWith('~/')?join(homedir(),v.root.slice(2)):v.root;mkdirSync(root,{recursive:true});cwd=join(root,v.id);await git('worktree','add','-b','agent/'+v.id,cwd,v.branch);}else if(v.worktree==='existing'){cwd=realpathSync(cwd);if(!(await git('worktree','list','--porcelain')).split('\\n').includes('worktree '+cwd))throw Error('Remote worktree no longer registered');}console.log(JSON.stringify({cwd}));`;
   const [command, ...args] = sshCommand(host, [
     host.bun ?? "bun",
     "-e",
     source,
     JSON.stringify(input),
   ]);
-  const r = spawnSync(command, args, { encoding: "utf8", timeout: 60000 });
-  if (r.status !== 0)
-    throw new AgentError({ message: "Remote worktree preparation failed" });
-  return (JSON.parse(r.stdout) as { cwd: string }).cwd;
+  const p = Bun.spawn([command, ...args], { stdout: "pipe", stderr: "pipe" });
+  const timer = setTimeout(() => p.kill(), 60000);
+  try {
+    const [out, , code] = await Promise.all([
+      new Response(p.stdout).text(),
+      new Response(p.stderr).text(),
+      p.exited,
+    ]);
+    if (code !== 0)
+      throw new AgentError({ message: "Remote worktree preparation failed" });
+    return (JSON.parse(out) as { cwd: string }).cwd;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 export function remoteAgentCommand(
   host: Host,
