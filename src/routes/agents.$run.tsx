@@ -7,7 +7,7 @@ import { KV, Mono, Pill, RelativeTime, StatusBadge } from "@/components/domain";
 import { Card, PageHeader, Section } from "@/components/page-header";
 import { EmptyState, ErrorState, PageSkeleton } from "@/components/states";
 import { Button } from "@/components/ui/button";
-import { mergeChunks } from "@/lib/api/adapters";
+import { mergeChunks } from "@/lib/agent-events";
 import { cancelAgentRun, getAgentRun } from "@/lib/api/client";
 import type { AgentEvent } from "@/lib/api/types";
 import { formatCost, formatDuration, repoName } from "@/lib/format";

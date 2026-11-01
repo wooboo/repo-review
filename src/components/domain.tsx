@@ -3,7 +3,7 @@ import { useState } from "react";
 import type * as React from "react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
-import type { ActionStatus, AgentRunStatus, BranchClone, BranchGroup, ChecksSummary, PullRequest, ReviewState, ScanStatus, State, Verdict } from "@/lib/api/types";
+import type { ActionStatus, AgentRunStatus, BranchClone, BranchState, BranchGroup, ChecksSummary, LandedVia, LandingMethod, PullRequest, ReviewState, ScanStatus, Verdict } from "@/lib/api/types";
 import { divergenceWidth, formatDateTime, relativeTime, shortSha } from "@/lib/format";
 import { divergingShas, VERDICTS } from "@/lib/verdicts";
 import { cn } from "@/lib/utils";
@@ -40,8 +40,8 @@ export function VerdictBadge({ verdict, className }: { verdict: Verdict; classNa
   );
 }
 
-export function StateBadge({ state }: { state: State }) {
-  const integrated = state === "merged" || state === "patch-merged" || state === "squash-merged" || state === "content-in-base";
+export function StateBadge({ state }: { state: BranchState }) {
+  const integrated = state === "merged" || state === "patch-merged" || state === "squash-merged" || state === "content-in-base" || state === "pr-merged";
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -104,6 +104,24 @@ export function PrStateBadge({ pr }: { pr: Pick<PullRequest, "state" | "draft" |
   return (
     <Pill t={t}>
       #{pr.number} {pr.draft && pr.state === "open" ? m.prs.draft : m.prs.state[pr.state]}
+    </Pill>
+  );
+}
+
+/** Merge method of a merged PR or landing ("squash", "rebase", …); nothing when unknown. */
+export function MethodPill({ method }: { method: LandingMethod | "direct" | null | undefined }) {
+  if (!method || method === "unknown") return null;
+  return <Pill>{m.prs.landedMethod[method]}</Pill>;
+}
+
+/** "Landed via #12 · squash", or "+2 after #12" when the branch kept going after its PR merged. */
+export function LandedBadge({ landed, className }: { landed: LandedVia; className?: string }) {
+  if (landed.extraCommits > 0) return <Pill t="warn" className={className}>{m.provenance.afterShort(landed.extraCommits, landed.number)}</Pill>;
+  const method = m.provenance.method[landed.method];
+  return (
+    <Pill t="good" className={className}>
+      {m.provenance.landedVia(landed.number)}
+      {method && <span className="font-normal opacity-80">· {method}</span>}
     </Pill>
   );
 }

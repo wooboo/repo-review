@@ -1,18 +1,87 @@
 /**
- * UI-facing shapes of the backend, exactly as agreed in docs/API.md "Contract v2".
- * Read models that Contract v2 keeps unchanged mirror the current server results,
- * plus the v2 additions (`about`, `jev`, dashboard counters).
+ * UI-facing shapes of the backend (docs/API.md). Contract v2 types come straight from the domain
+ * schemas in `src/domain/model.ts`; read models without an exported schema mirror the server
+ * results. Contract v3 additions are optional fields and separate types, marked TODO(contract-v3):
+ * they become required once the backend implementing v3 is merged.
  */
-import type { Agent, Forge, Host, Settings, State, Verdict } from "@/domain/model";
+import type {
+  About,
+  ActionKind,
+  ActionTarget,
+  Agent,
+  AgentEvent,
+  AgentInfo,
+  AgentRun,
+  AgentRunInput,
+  AgentTask,
+  Branch as DomainBranch,
+  ChecksSummary,
+  Clone as DomainClone,
+  Forge,
+  Host,
+  JevClassification,
+  PlannedAction,
+  PullRequest as DomainPullRequest,
+  PullRequestDetail as DomainPullRequestDetail,
+  Settings,
+  State,
+  Thread,
+  Verdict,
+  Worktree as DomainWorktree,
+} from "@/domain/model";
 
-export type { Agent, Forge, Host, Settings, State, Verdict };
+export type { About, ActionKind, ActionTarget, Agent, AgentEvent, AgentInfo, AgentRun, AgentRunInput, AgentTask, ChecksSummary, Forge, Host, PlannedAction, Settings, State, Thread, Verdict };
+
+/** TODO(contract-v3): v3 adds the "pr-merged" and "pr-merged-changed" clone states. */
+export type BranchState = State | "pr-merged" | "pr-merged-changed";
 
 export type Page<T> = { items: T[]; total: number; page: number; pageSize: number };
 export type JobRef = { id: string };
 
-// ---------- inventory read models (unchanged names, v2 additions)
+// ---------- Contract v3: pull-request provenance
 
-export type About = { summary: string; description: string; kind: string; generatedAt: string };
+export type LandingMethod = "merge" | "squash" | "rebase" | "unknown";
+export type LandedVia = {
+  pullRequestId: string;
+  number: number;
+  url: string;
+  method: LandingMethod;
+  mergeCommitSha: string | null;
+  matchedSha: string;
+  extraCommits: number;
+  extraCommitShas: readonly string[];
+};
+export type PullRequestCommit = { sha: string; subject: string; author: string; at: string };
+export type LandingVia = "merge-commit-sha" | "message" | "trailer" | "patch-id" | "none";
+export type Landing = {
+  sha: string;
+  subject: string;
+  author: string;
+  at: string;
+  base: string;
+  pullRequestId: string | null;
+  number: number | null;
+  sourceBranch: string | null;
+  method: LandingMethod | "direct";
+  via: LandingVia;
+  /** Local branches (live or gone) that landed in this commit. */
+  branchIds: readonly string[];
+};
+export type BranchHistoryItem = {
+  host: string;
+  repo: string;
+  clonePath: string;
+  branch: string;
+  sha: string;
+  firstSeen: string;
+  lastSeen: string;
+  goneAt: string | null;
+  landedVia: LandedVia | null;
+};
+export type LandingQuery = { repo: string; base?: string; since?: string; page: number; pageSize: number };
+export type BranchHistoryQuery = { repo?: string; gone?: boolean; page: number; pageSize: number };
+
+// ---------- inventory read models
 
 export type RepositorySummary = {
   id: string;
@@ -23,92 +92,24 @@ export type RepositorySummary = {
   about: About | null;
 };
 
-export type Remote = {
-  name: string;
-  url: string;
-  pushurl: string;
-  key: string;
-  defaultBranch: string;
-  fetchError: string | null;
-};
+export type Remote = DomainClone["remotes"][number];
+export type FileChange = DomainWorktree["files"][number];
 
-export type FileChange = { path: string; xy: string; mtime: string | null };
+// TODO(contract-v3): `missing` becomes required; until then it is derived from `exists === false`.
+export type Worktree = DomainWorktree & { missing?: boolean };
 
-export type Worktree = {
-  path: string;
-  head: string;
-  branch: string | null;
-  main: boolean;
-  exists: boolean;
-  locked: boolean;
-  prunable: boolean;
-  detached: boolean;
-  operations: readonly string[];
-  submodules: readonly string[];
-  dirty: boolean;
-  files: readonly FileChange[];
-  total: number;
-  staged: number;
-  unstaged: number;
-  untracked: number;
-  conflicts: number;
-  error: string | null;
-};
+// TODO(contract-v3): per-clone `landedVia` becomes required.
+export type BranchInfo = DomainBranch & { landedVia?: LandedVia | null };
 
-export type Thread = {
-  id: string;
-  branch: string | null;
-  worktree: string | null;
-  projectRoot: string | null;
-  title: string;
-  status: string;
-};
-
-export type BranchInfo = {
-  name: string;
-  sha: string;
-  date: string;
-  author: string;
-  subject: string;
-  upstream: string;
-  upstreamGone: boolean;
-  onRemotes: Readonly<Record<string, string>>;
-  unpushed: number;
-  unique: number;
-  base: string | null;
-  baseSha: string | null;
-  mergeBase: string | null;
-  vsBases: Readonly<Record<string, { ahead: number; behind: number }>>;
-  ahead: number;
-  behind: number;
-  state: State;
-  squashCommit: string | null;
-  containedIn: readonly string[];
-  commits: readonly string[];
-  diffstat: string;
-  residual: string;
-};
-
-export type Clone = {
+export type Clone = Omit<DomainClone, "branches" | "remoteBranches" | "worktrees"> & {
   host: string;
-  path: string;
-  commonDir: string;
-  name: string;
-  key: string;
-  roots: readonly string[];
-  remotes: readonly Remote[];
-  bases: readonly string[];
   branches: readonly BranchInfo[];
   remoteBranches: readonly BranchInfo[];
   worktrees: readonly Worktree[];
-  stashes: readonly string[];
-  threads: readonly Thread[];
-  about: string;
-  errors: readonly string[];
 };
 
-export type JevRecommendation = "delete" | "archive" | "keep" | "finish_and_merge";
-export type Jev = { recommendation: JevRecommendation; confidence: number; flags: string[] };
+export type JevRecommendation = JevClassification["recommendation"];
+export type Jev = JevClassification;
 
 export type BranchClone = BranchInfo & { host: string; path: string };
 
@@ -124,6 +125,8 @@ export type BranchGroup = {
   date: string;
   clones: BranchClone[];
   jev: Jev | null;
+  /** TODO(contract-v3): branch-level provenance when every clone agrees. */
+  landedVia?: LandedVia | null;
 };
 
 export type RepositoryDetail = {
@@ -184,41 +187,14 @@ export type ListInput = {
 
 // ---------- pull requests
 
-export type ChecksState = "success" | "failure" | "pending" | "none";
-export type ChecksSummary = { state: ChecksState; total: number; failed: number; pending: number };
-export type PullRequestState = "open" | "merged" | "closed";
-export type ReviewState = "approved" | "changes_requested" | "review_required" | "none";
-export type PullRequest = {
-  id: string;
-  repo: string;
-  forge: "github" | "forgejo";
-  number: number;
-  title: string;
-  url: string;
-  author: string;
-  state: PullRequestState;
-  draft: boolean;
-  head: string;
-  headSha: string;
-  base: string;
-  branchId: string | null;
-  createdAt: string;
-  updatedAt: string;
-  mergedAt: string | null;
-  checks: ChecksSummary;
-  review: ReviewState;
-  mergeable: boolean | null;
-};
-export type PullRequestFile = { path: string; status: string; additions: number; deletions: number };
-export type PullRequestDetail = PullRequest & {
-  body: string;
-  files: PullRequestFile[];
-  diff: string;
-  diffTruncated: boolean;
-  checkRuns: { name: string; state: ChecksState; url: string | null }[];
-  reviews: { author: string; state: string; body: string; at: string }[];
-  comments: { author: string; body: string; at: string }[];
-};
+export type ChecksState = ChecksSummary["state"];
+export type PullRequestState = DomainPullRequest["state"];
+export type ReviewState = DomainPullRequest["review"];
+/** TODO(contract-v3): merge commit, method and commit count become required. */
+type ProvenanceFields = { mergeCommitSha?: string | null; mergeMethod?: LandingMethod | null; commitCount?: number };
+export type PullRequest = DomainPullRequest & ProvenanceFields;
+export type PullRequestFile = DomainPullRequestDetail["files"][number];
+export type PullRequestDetail = DomainPullRequestDetail & ProvenanceFields & { commits?: readonly PullRequestCommit[] };
 export type PullRequestQuery = {
   repo?: string;
   state?: PullRequestState | "all";
@@ -230,35 +206,7 @@ export type MergeMethod = "merge" | "squash" | "rebase";
 
 // ---------- actions
 
-export type ActionKind =
-  | "delete-branch"
-  | "archive-and-delete"
-  | "switch-to-base"
-  | "prune-worktree"
-  | "fast-forward-base"
-  | "push-branch"
-  | "set-remote-url";
-export type ActionTarget = {
-  host: string;
-  repo: string;
-  branch?: string;
-  worktree?: string;
-  remote?: string;
-  url?: string;
-};
-export type ActionStatus = "planned" | "skipped" | "blocked" | "running" | "done" | "failed";
-export type PlannedAction = {
-  id: string;
-  kind: ActionKind;
-  target: ActionTarget;
-  branchId: string | null;
-  repoKey: string;
-  status: ActionStatus;
-  reason: string;
-  restore: string | null;
-  createdAt: string;
-  finishedAt: string | null;
-};
+export type ActionStatus = PlannedAction["status"];
 export type PlanInput = {
   kind: ActionKind;
   branchIds?: string[];
@@ -271,40 +219,10 @@ export type Job<T> = { id: string; status: JobStatus; result: T | null; error: s
 
 // ---------- agents
 
-export type AgentInfo = { id: string; label: string; kind: "acp" | "cli"; models: string[]; defaultModel: string };
-export type AgentTask = "review-branch" | "make-pr" | "review-pr" | "cleanup-repo" | "describe-repo" | "custom";
-export type WorktreeMode = "new" | "existing" | "none";
-export type AgentRunInput = {
-  agentId: string;
-  model?: string;
-  task: AgentTask;
-  repo: string;
-  host?: string;
-  branchId?: string;
-  pullRequestId?: string;
-  note?: string;
-  worktree: WorktreeMode;
-};
-export type AgentRunStatus = "queued" | "running" | "done" | "failed" | "cancelled";
-export type AgentRun = {
-  id: string;
-  agentId: string;
-  model: string;
-  task: AgentTask;
-  repo: string;
-  branchId: string | null;
-  pullRequestId: string | null;
-  cwd: string;
-  status: AgentRunStatus;
-  summary: string | null;
-  costUsd: number | null;
-  pullRequestUrl: string | null;
-  startedAt: string;
-  finishedAt: string | null;
-};
-export type AgentEventKind = "message" | "thought" | "tool" | "permission" | "status" | "error";
-export type AgentEvent = { seq: number; at: string; kind: AgentEventKind; text: string };
-export type AgentRunDetail = { run: AgentRun; events: AgentEvent[]; cursor: number };
+export type WorktreeMode = AgentRunInput["worktree"];
+export type AgentRunStatus = AgentRun["status"];
+export type AgentEventKind = AgentEvent["kind"];
+export type AgentRunDetail = { run: AgentRun; events: readonly AgentEvent[]; cursor: number };
 export type AgentRunQuery = { status?: AgentRunStatus; repo?: string; page: number; pageSize: number };
 
 export type LiveEvent = { type: "scan" | "job" | "agent-run" | "inventory"; id: string };

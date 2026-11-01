@@ -1,8 +1,8 @@
 import { queryOptions, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useEffect, useSyncExternalStore } from "react";
-import { useRouter } from "@tanstack/react-router";
 import * as api from "@/lib/api/client";
-import type { AgentRunQuery, ListInput, LiveEvent, PlannedAction, PullRequestQuery, Verdict } from "@/lib/api/types";
+import type { AgentRunQuery, BranchHistoryQuery, LandingQuery, ListInput, LiveEvent, PlannedAction, PullRequestQuery, Verdict } from "@/lib/api/types";
+import * as v3 from "@/lib/api/v3";
 
 /** Inventory queries share the "inv" prefix so a finished scan can refresh all of them at once. */
 export const q = {
@@ -18,12 +18,22 @@ export const q = {
   scan: (id: string) => queryOptions({ queryKey: ["scans", id], queryFn: () => api.getScan(id) }),
   settings: () => queryOptions({ queryKey: ["settings"], queryFn: api.getSettings, staleTime: 5 * 60_000 }),
   prs: (input: PullRequestQuery) => queryOptions({ queryKey: ["prs", input], queryFn: () => api.listPullRequests(input), staleTime: 60_000 }),
+  /** Every PR of the cache (all pages), for branch ↔ PR badges. */
+  allPrs: (input: Omit<PullRequestQuery, "page" | "pageSize">) => queryOptions({ queryKey: ["prs", "all", input], queryFn: () => api.allPullRequests(input), staleTime: 60_000 }),
   pr: (id: string) => queryOptions({ queryKey: ["pr", id], queryFn: () => api.getPullRequest(id), staleTime: 60_000 }),
   agents: () => queryOptions({ queryKey: ["agents"], queryFn: api.listAgents, staleTime: 5 * 60_000 }),
   runs: (input: AgentRunQuery) => queryOptions({ queryKey: ["runs", input], queryFn: () => api.listAgentRuns(input) }),
   actions: (input: { page: number; pageSize: number }) => queryOptions({ queryKey: ["actions", input], queryFn: () => api.listActions(input) }),
+  // TODO(contract-v3): served by the v3 backend; "not available yet" until it is merged.
+  landings: (input: LandingQuery) => queryOptions({ queryKey: ["inv", "landings", input], queryFn: () => v3.listLandings(input), retry: v3Retry }),
+  history: (input: BranchHistoryQuery) => queryOptions({ queryKey: ["inv", "history", input], queryFn: () => v3.listBranchHistory(input), retry: v3Retry }),
   job: <T>(id: string, result: (v: unknown) => T) => queryOptions({ queryKey: ["job", id], queryFn: () => api.getBackgroundJob(id, result) }),
 };
+
+/** A missing v3 function will not appear on retry. */
+function v3Retry(count: number, error: unknown) {
+  return !v3.isNotAvailableYet(error) && count < 3;
+}
 
 export const asActions = (v: unknown) => (Array.isArray(v) ? (v as PlannedAction[]) : []);
 
@@ -70,18 +80,17 @@ export function invalidateFor(client: QueryClient, event: LiveEvent) {
   }
 }
 
-/**
- * Mounted once in the shell. SSE is used only when the route tree has the /api/events route
- * (Contract v2), so a missing endpoint never costs a failing request.
- */
+/** Mounted once in the shell: SSE invalidation hints from /api/events, 2 s polling when the stream fails. */
 export function useLiveUpdates() {
   const client = useQueryClient();
-  const router = useRouter();
-  const hasEvents = "/api/events" in router.routesByPath;
   useEffect(() => {
-    if (!hasEvents || typeof EventSource === "undefined") return setMode("poll");
+    if (typeof EventSource === "undefined") return setMode("poll");
     const source = new EventSource("/api/events");
-    source.onopen = () => setMode("sse");
+    source.onopen = () => {
+      // Events are hints, not a replay log: refetch whatever changed while disconnected.
+      if (mode === "poll") void client.invalidateQueries();
+      setMode("sse");
+    };
     source.onmessage = (e: MessageEvent<string>) => {
       try {
         invalidateFor(client, JSON.parse(e.data) as LiveEvent);
@@ -90,14 +99,13 @@ export function useLiveUpdates() {
       }
     };
     source.onerror = () => {
-      // A missing endpoint closes the stream for good; a dropped one reconnects by itself.
-      if (source.readyState === EventSource.CLOSED || mode !== "sse") {
-        source.close();
-        setMode("poll");
-      }
+      // A stream that never opened falls back to polling for good; a dropped one reconnects by
+      // itself, and the views poll until it is back.
+      if (source.readyState === EventSource.CLOSED || mode === "connecting") source.close();
+      setMode("poll");
     };
     return () => source.close();
-  }, [client, hasEvents]);
+  }, [client]);
 }
 
 /** Polls a job until it is done or failed. */
