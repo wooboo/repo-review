@@ -1,14 +1,29 @@
-import { createFileRoute } from '@tanstack/react-router'
-
-export const Route = createFileRoute('/')({ component: Home })
-
-function Home() {
+import { createFileRoute } from "@tanstack/react-router";
+import { listRepositories } from "../server/functions";
+export const Route = createFileRoute("/")({
+  loader: () => listRepositories({ data: {} }),
+  component: Index,
+});
+function Index() {
+  const result = Route.useLoaderData();
   return (
-    <div className="p-8">
-      <h1 className="text-4xl font-bold">Welcome to TanStack Start</h1>
-      <p className="mt-4 text-lg">
-        Edit <code>src/routes/index.tsx</code> to get started.
-      </p>
-    </div>
-  )
+    <main>
+      <h1>repo-review</h1>
+      <p>Repository inventory</p>
+      {result.total === 0 ? (
+        <p>
+          No repositories yet. Configure hosts and start a scan through the API
+          or MCP.
+        </p>
+      ) : (
+        <ul>
+          {result.items.map((r) => (
+            <li key={r.id}>
+              {r.name} — {r.clones} clones, {r.branches} branches
+            </li>
+          ))}
+        </ul>
+      )}
+    </main>
+  );
 }
