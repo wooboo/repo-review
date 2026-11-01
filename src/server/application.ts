@@ -1,12 +1,17 @@
-import { ApplicationError } from "./errors";
+import { subsystemLayers } from "./services";
+import { cancelAllRuns } from "./agents";
+import * as actions from "./actions";
+import * as prs from "./pull-requests";
+import { PullRequest, type PlanActionsInput } from "../domain/model";
+import { ApplicationError, SettingsError, ScanError } from "./errors";
 import { json, type Json } from "../domain/json";
 import { Context, Effect, Layer, ManagedRuntime, Schema } from "effect";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { openRepository } from "../db/repository";
-import { Snapshot, Settings, ActionResult } from "../domain/model";
-import type { Clone, Action, Host, ListInput } from "../domain/model";
+import { Snapshot, Settings, PlannedAction } from "../domain/model";
+import type { Clone, Host, ListInput } from "../domain/model";
 import { searchParams } from "../domain/model";
 import { verdict, activeStatus } from "../domain/logic";
 import { runHost } from "./hosts";
@@ -42,17 +47,23 @@ export function makeApplication(path?: string) {
     forges: [],
     agents: [],
     staleDays: 60,
-    worktreeDir: join(homedir(), ".repo-review/worktrees"),
+    worktreeDir: "~/.repo-review/worktrees",
     dailyScanTime: "03:00",
   };
   if (!db.get("settings", "main")) db.put("settings", "main", defaults);
-  for (const job of db.list<Job>("scan"))
-    if (["queued", "running"].includes(job.status))
-      db.put("scan", job.id, {
-        ...job,
-        status: "failed",
-        errors: ["Server restarted"],
-      });
+  for (const kind of ["scan", "job", "agent", "action"])
+    for (const job of db.list<Job>(kind))
+      if (["queued", "running"].includes(job.status))
+        db.put(kind, job.id, {
+          ...job,
+          status: "failed",
+          errors: ["Server restarted"],
+          error: "Server restarted",
+          reason: "Server restarted",
+          summary: "Server restarted",
+          finishedAt: new Date().toISOString(),
+        });
+  const background = new Set<Promise<unknown>>();
   const pending = new Map<string, Promise<void>>();
   let timer: ReturnType<typeof setInterval> | undefined;
   const settings = () =>
@@ -90,6 +101,19 @@ export function makeApplication(path?: string) {
             ),
       }));
       return {
+        jev: process.env.TYPESAFE_API_KEY
+          ? (db
+              .list<{
+                id: string;
+                value: {
+                  recommendation:
+                    "delete" | "archive" | "keep" | "finish_and_merge";
+                  confidence: number;
+                  flags: string[];
+                };
+              }>("classification")
+              .find((c) => c.id === id)?.value ?? null)
+          : null,
         id,
         name: rows[0].branch.name,
         repo: rows[0].clone.key,
@@ -154,11 +178,16 @@ export function makeApplication(path?: string) {
   };
   const api = {
     db,
+    trackWork<T>(work: Promise<T>): Promise<T> {
+      background.add(work);
+      void work.finally(() => background.delete(work)).catch(() => {});
+      return work;
+    },
     settings,
     updateSettings(value: Settings) {
       const valid = Schema.decodeUnknownSync(Settings)(value);
       if (new Set(valid.hosts.map((h) => h.id)).size !== valid.hosts.length)
-        throw Error("Duplicate host id");
+        throw new SettingsError({ message: "Duplicate host id" });
       db.put("settings", "main", valid);
       return valid;
     },
@@ -169,6 +198,18 @@ export function makeApplication(path?: string) {
       const keys = [...new Set(selected.map((c) => c.key))];
       return paged(
         keys.map((key) => ({
+          about:
+            db
+              .list<{
+                key: string;
+                about: {
+                  summary: string;
+                  description: string;
+                  kind: string;
+                  generatedAt: string;
+                };
+              }>("description")
+              .find((d) => d.key === key)?.about ?? null,
           id: key,
           key,
           name: key.split("/").at(-1) ?? key,
@@ -180,6 +221,18 @@ export function makeApplication(path?: string) {
     },
     getRepository(id: string) {
       return {
+        about:
+          db
+            .list<{
+              key: string;
+              about: {
+                summary: string;
+                description: string;
+                kind: string;
+                generatedAt: string;
+              };
+            }>("description")
+            .find((d) => d.key === id)?.about ?? null,
         key: id,
         clones: clones().filter((c) => c.key === id),
         branches: branchRows().filter((b) => b.repo === id),
@@ -227,6 +280,18 @@ export function makeApplication(path?: string) {
     dashboard() {
       const branches = branchRows();
       return {
+        openPullRequests: db
+          .list<PullRequest>("pull_request")
+          .filter((p) => p.state === "open").length,
+        runningAgentRuns: db
+          .list<{ status: string }>("agent")
+          .filter((r) => r.status === "running" || r.status === "queued")
+          .length,
+        lastScan:
+          db
+            .list<Job>("scan")
+            .sort((a, b) => b.started.localeCompare(a.started))[0] ?? null,
+        jevEnabled: Boolean(process.env.TYPESAFE_API_KEY),
         repositories: new Set(clones().map((c) => c.key)).size,
         clones: clones().length,
         branches: branches.length,
@@ -251,7 +316,7 @@ export function makeApplication(path?: string) {
       const hosts = settings().hosts.filter(
         (h) => h.enabled && (!input.hosts.length || input.hosts.includes(h.id)),
       );
-      if (!hosts.length) throw Error("No enabled hosts");
+      if (!hosts.length) throw new ScanError({ message: "No enabled hosts" });
       const job: Job = {
         id: crypto.randomUUID(),
         status: "queued",
@@ -345,139 +410,97 @@ export function makeApplication(path?: string) {
     listScans() {
       return db.list<Job>("scan");
     },
-    async planCleanup(input: ListInput = {}) {
-      const results = [];
-      const first = api.searchBranches({
+    planCleanup(input: ListInput = {}) {
+      return actions.planActions(api, { kind: "delete-branch", filter: input });
+    },
+    planActions(input: typeof PlanActionsInput.Type) {
+      return actions.planActions(api, input);
+    },
+    applyActions(ids: readonly string[]) {
+      return actions.applyActions(api, ids);
+    },
+    listPullRequests(
+      input: typeof import("../domain/model").PullRequestListInput.Type = {},
+    ) {
+      const page = db.page<PullRequest>("pull_request", {
         ...input,
-        verdict: "delete",
-        page: 1,
-        pageSize: 200,
+        state: input.state ?? "open",
       });
-      const branches = [...first.items];
-      for (let page = 2; page <= Math.ceil(first.total / 200); page++)
-        branches.push(
-          ...api.searchBranches({
-            ...input,
-            verdict: "delete",
-            page,
-            pageSize: 200,
-          }).items,
-        );
-      for (const b of branches)
-        for (const c of b.clones) {
-          const action: Action = {
-            id: crypto.randomUUID(),
-            host: c.host,
-            repo: c.path,
-            branch: b.name,
-            sha: c.sha,
-            base: c.base ?? "",
-            baseSha: c.baseSha ?? "",
-            state: c.state,
-            archive: false,
-            remote: "origin",
-          };
-          db.put("action", action.id, { ...action, status: "running" });
-          results.push(await api.runAction(action, false));
-        }
-      return results;
+      return {
+        ...page,
+        items: page.items.map((p) => Schema.decodeUnknownSync(PullRequest)(p)),
+      };
     },
-    async runAction(action: Action, apply: boolean) {
-      if (
-        db
-          .list<{ repo: string; branch: string; status: string }>("agent")
-          .some(
-            (r) =>
-              r.repo === action.repo &&
-              r.branch === action.branch &&
-              r.status === "running",
-          )
-      ) {
-        const result = {
-          id: action.id,
-          status: "blocked" as const,
-          reason: "Branch used by active agent run",
-          restore: "",
-        };
-        db.put("action", action.id, { ...action, ...result });
-        return result;
-      }
-      const host = settings().hosts.find((h) => h.id === action.host);
-      if (!host) throw Error("Host missing");
-      let result: typeof ActionResult.Type | undefined;
-      await runHost(
-        host,
-        "worker",
-        [
-          Buffer.from(JSON.stringify({ items: [action], apply })).toString(
-            "base64",
-          ),
-        ],
-        (event) => {
-          const e = event as { type: string; result?: unknown };
-          if (e.type === "action")
-            result = Schema.decodeUnknownSync(ActionResult)(e.result);
-        },
-      );
-      if (!result) throw Error("Worker returned no result");
-      db.put("action", action.id, { ...action, ...result });
-      return result;
+    getPullRequest(id: string) {
+      return prs.getPullRequest(api, id);
     },
-    async applyActions(ids: readonly string[]) {
-      const results = [];
-      for (const id of ids) {
-        const action = db.get<Action & { status: string }>("action", id);
-        if (!action || action.status !== "planned")
-          throw Error("Only planned actions can be applied");
-        db.put("action", id, { ...action, status: "running" });
-        results.push(await api.runAction(action, true));
-      }
-      return results;
+    createPullRequest(
+      input: typeof import("../domain/model").CreatePullRequestInput.Type,
+    ) {
+      return prs.createPullRequest(api, input);
     },
-    getActions() {
-      return db.list<Action & typeof ActionResult.Type>("action");
+    mergePullRequest(
+      input: typeof import("../domain/model").MergePullRequestInput.Type,
+    ) {
+      return prs.mutatePullRequest(api, input.id, "merge", {
+        ...input,
+      }) as Promise<PullRequest>;
     },
-    async refreshPullRequests(key: string) {
-      const values = (await new ForgeService(
-        settings().forges,
-      ).listPullRequests(key)) as {
-        number: number;
-        state: string;
-        merged_at?: string;
-        head: { ref: string; sha: string };
-        [key: string]: unknown;
-      }[];
-      for (const pr of values)
-        db.put("pull_request", key + "#" + pr.number, {
-          ...pr,
-          repo: key,
-          head: pr.head.ref,
-          headSha: pr.head.sha,
-          state: pr.merged_at ? "merged" : pr.state,
-        });
-      return values;
+    closePullRequest(id: string) {
+      return prs.mutatePullRequest(api, id, "close") as Promise<PullRequest>;
+    },
+    async commentPullRequest(input: { id: string; body: string }) {
+      await prs.mutatePullRequest(api, input.id, "comment", {
+        body: input.body,
+      });
+      return { ok: true as const };
+    },
+    listActions(
+      input: typeof import("../domain/model").ActionListInput.Type = {},
+    ) {
+      const page = db.page<typeof PlannedAction.Type>("action", input);
+      return {
+        ...page,
+        items: page.items.map((a) =>
+          Schema.decodeUnknownSync(PlannedAction)(a),
+        ),
+      };
+    },
+    refreshPullRequests(key?: string): Promise<PullRequest[]> {
+      return prs.refreshPullRequests(api, key);
     },
     forge() {
       return new ForgeService(settings().forges);
     },
+    runScheduled(now = new Date()) {
+      const day = now.toISOString().slice(0, 10);
+      if (process.env.BACKUP_DIR && db.get("schedule", "backup-day") !== day) {
+        db.backup(process.env.BACKUP_DIR);
+        db.put("schedule", "backup-day", day);
+      }
+      if (
+        now.toTimeString().slice(0, 5) === settings().dailyScanTime &&
+        db.get("schedule", "scan-day") !== day
+      ) {
+        db.put("schedule", "scan-day", day);
+        api.startScan({ hosts: [], fetch: true }, "schedule");
+      }
+    },
     startScheduler() {
       if (timer) return;
-      let last = "";
       timer = setInterval(() => {
-        const now = new Date();
-        const day = now.toISOString().slice(0, 10);
-        if (
-          now.toTimeString().slice(0, 5) === settings().dailyScanTime &&
-          last !== day
-        ) {
-          last = day;
-          api.startScan({ hosts: [], fetch: true }, "schedule");
+        try {
+          api.runScheduled();
+        } catch (e) {
+          console.error("Scheduled maintenance failed:", String(e));
         }
       }, 30000);
       timer.unref();
     },
-    close() {
+    async close() {
       if (timer) clearInterval(timer);
+      if (pending.size || background.size)
+        await Promise.allSettled([...pending.values(), ...background]);
       db.close();
     },
   };
@@ -489,15 +512,22 @@ export class Application extends Context.Service<Application, ApplicationApi>()(
 ) {}
 export const makeAppRuntime = (path?: string) =>
   ManagedRuntime.make(
-    Layer.effect(
-      Application,
-      Effect.acquireRelease(
-        Effect.sync(() => {
-          const app = makeApplication(path);
-          app.startScheduler();
-          return app;
-        }),
-        (app) => Effect.sync(() => app.close()),
+    subsystemLayers.pipe(
+      Layer.provideMerge(
+        Layer.effect(
+          Application,
+          Effect.acquireRelease(
+            Effect.sync(() => {
+              const app = makeApplication(path);
+              app.startScheduler();
+              return app;
+            }),
+            (app) =>
+              Effect.promise(async () => {
+                await app.close();
+              }),
+          ),
+        ),
       ),
     ),
   );
@@ -508,9 +538,16 @@ export const withApp = <T>(f: (app: ApplicationApi) => Promise<T> | T) =>
       const app = yield* Application;
       return yield* Effect.tryPromise({
         try: async () => f(app),
-        catch: (e) => new ApplicationError({ message: String(e) }),
+        catch: (e) =>
+          e instanceof Error ? e : new ApplicationError({ message: String(e) }),
       });
     }),
   );
 export const hostById = (hosts: readonly Host[], id: string) =>
   hosts.find((h) => h.id === id);
+
+for (const signal of ["SIGTERM", "SIGINT"] as const)
+  process.once(signal, () => {
+    cancelAllRuns();
+    void appRuntime.dispose().finally(() => process.exit(0));
+  });

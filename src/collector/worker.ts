@@ -1,3 +1,4 @@
+import { executeExtra, type WorkerAction } from "./action-worker";
 import { realpathSync } from "node:fs";
 import type { Action, ActionResult } from "../domain/model";
 import { activeStatus, integrated } from "../domain/logic";
@@ -138,9 +139,21 @@ export function execute(
 if (import.meta.main) {
   const payload = JSON.parse(
     Buffer.from(process.argv[2], "base64").toString(),
-  ) as { items: Action[]; apply: boolean };
+  ) as { items: (Action | WorkerAction)[]; apply: boolean };
   for (const item of payload.items)
     console.log(
-      JSON.stringify({ type: "action", result: execute(item, payload.apply) }),
+      JSON.stringify({
+        type: "action",
+        result:
+          "kind" in item
+            ? item.deletion
+              ? {
+                  ...item,
+                  ...execute(item.deletion, payload.apply),
+                  finishedAt: payload.apply ? new Date().toISOString() : null,
+                }
+              : executeExtra(item, payload.apply)
+            : execute(item, payload.apply),
+      }),
     );
 }

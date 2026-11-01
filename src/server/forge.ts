@@ -1,3 +1,4 @@
+import { ForgeUnavailable, ForgeRejected, NotFound } from "./pull-requests";
 import { spawnSync } from "node:child_process";
 import type { Forge, Clone } from "../domain/model";
 import { normalizeUrl } from "../domain/logic";
@@ -11,14 +12,15 @@ export class ForgeService {
     raw = false,
   ): Promise<unknown> {
     const f = this.config.find((f) => f.host === host);
-    if (!f) throw Error("Forge not configured");
+    if (!f) throw new ForgeUnavailable({ message: "Forge not configured" });
     let token = f.tokenEnv ? process.env[f.tokenEnv] : undefined;
     if (f.tokenCommand) {
       const r = spawnSync("sh", ["-c", f.tokenCommand], {
         encoding: "utf8",
         timeout: 15000,
       });
-      if (r.status !== 0) throw Error("Token command failed");
+      if (r.status !== 0)
+        throw new ForgeUnavailable({ message: "Token command failed" });
       token = r.stdout.trim();
     }
     const base =
@@ -38,8 +40,22 @@ export class ForgeService {
       },
       body: body ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(30000),
+    }).catch((e: unknown) => {
+      throw new ForgeUnavailable({
+        message: e instanceof Error ? e.message : "Forge request failed",
+      });
     });
-    if (!response.ok) throw Error(`Forge HTTP ${response.status}`);
+    if (!response.ok) {
+      const payload = (await response
+        .json()
+        .catch(() => ({ message: `Forge HTTP ${response.status}` }))) as {
+        message?: string;
+      };
+      const message = payload.message ?? `Forge HTTP ${response.status}`;
+      if (response.status === 404) throw new NotFound({ message });
+      if (response.status >= 500) throw new ForgeUnavailable({ message });
+      throw new ForgeRejected({ message });
+    }
     return raw
       ? response.text()
       : response.status === 204
