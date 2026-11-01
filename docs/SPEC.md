@@ -228,3 +228,20 @@ tombstone that does not prevent rediscovery. The forge repository is never delet
 Archives default to host-relative `~/.local/share/repo-review/archives`.
 MCP adds `update_settings`, `plan_repository_deletion`, `list_deleted_repositories`;
 `apply_actions` accepts confirm.
+
+### Contract v4.1: ownership and mute
+
+Forge `owners?: string[]` identifies owned account/org logins case-insensitively;
+empty/unconfigured owners preserves all-owned behavior. Repositories expose
+`owner`, `mine`, and `muted`; PR `mine` matches the stored author login rather than
+the repository owner. Local-only/unrecognized forge repositories are owned.
+
+Mute state persists independently in settings `muted-repositories`, keyed by the
+normalized repository id. Default inventory, PR, landing/history lists and dashboard
+inventory counts exclude muted repositories; lists accept `includeMuted` and
+`mine` filters before paging. Direct id lookups remain accessible. Scans keep
+collecting muted clones and cleanup planning includes them, while bulk PR sync
+skips them unless explicitly targeted. See Contract v4.1 in API.md for exact shapes.
+
+MCP tool list additions: `get_dashboard`, `set_repository_muted`. All MCP tools
+provide operational descriptions and descriptions for every input field.

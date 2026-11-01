@@ -491,7 +491,8 @@ contain existing staged/modified/untracked files and ignored files ≤5 MiB outs
 `.turbo`, `.cache`, `__pycache__`, `.gradle`, `Pods`, `DerivedData`, `.direnv`.
 Deleted tracked files are recoverable from patches. Skipped ignored files are lost;
 info.json lists up to 2000 skipped paths, repository identity, remotes, branch SHAs,
-linked worktrees and timestamps. Git bundle --all includes stash and is verified.
+linked worktrees and timestamps. Git bundle --all includes refs/stash and is verified;
+`stashes.bundle` carries every stash entry as `refs/stashes/<n>` (0 = newest).
 Ref-less repositories skip the bundle and record noRefs. Every produced archive
 file must exist and be nonempty before any removal. Archive failure leaves disk
 checkouts intact. External linked worktrees are recursively removed before the
@@ -526,3 +527,60 @@ history preserves refs/pull/N/head. When metadata/history cannot recover the nam
 sync/detail requests the merge commit using the read-only Git commit endpoint.
 A sanitized fixture covers recovery; live verification needs the operator's
 configured endpoint and credentials.
+
+## Contract v4.1: ownership and repository mute
+
+`Forge` adds `owners?: string[]`: account/org logins considered owned on that
+forge, matched case-insensitively. Omitted or empty owners preserves the existing
+all-owned behavior. Repository list items and details add:
+
+```ts
+owner: string | null; // owner component of normalized host/owner/name; null for local keys
+mine: boolean; // owner matches forge owners, or local/unrecognized forge, or owners absent/empty
+muted: boolean;
+```
+
+Every PR summary/detail adds `mine: boolean`, computed from its stored `author`
+login and the current forge owners. It never inherits repository ownership.
+Changing owners takes effect on reads immediately, with no rescan or resync.
+
+`setRepositoryMuted({ repositoryId: string, muted: boolean })` (POST) and MCP
+`set_repository_muted` return `{ repositoryId: string, muted: boolean }`.
+`repositoryId` is the exact normalized key returned by repository lists; an unknown
+key raises `NotFound`. Repeated calls are idempotent. Mute keys persist as a string
+array in the independent settings row `muted-repositories`; scan replacement and
+main settings edits cannot overwrite it. No schema migration is needed.
+
+These inputs add `includeMuted?: boolean` (default false) and `mine?: boolean`:
+`listRepositories`, `searchBranches`, `listWorktrees`, `listPullRequests`,
+`listLandings`, and `listBranchHistory`. Existing required inputs (including
+`listLandings.repo`) remain required. `mine: true` selects owned repositories for
+inventory/history/landings, but **owned PR authors only** for PR lists;
+`mine: false` selects the complement. Omitted `mine` imposes no ownership filter.
+Mute and ownership predicates run in SQL before pagination, so totals include only
+matching items. `getRepository`, `getBranch`, `getPullRequest`, and commit provenance
+lookups retain direct access to muted repositories.
+
+`getDashboard` and MCP `get_dashboard` exclude muted repositories from repository,
+clone, branch/verdict, worktree and open PR counts, and from running agent counts.
+They add `mutedRepositories: number` (distinct collected muted repository keys).
+Scans, scan status, global forge budgets and feature flags remain global.
+Ownership alone does not hide inventory: callers opt in with `mine`.
+
+All bulk PR sync paths (including refresh, scheduled scans and scan-triggered sync)
+skip muted keys. An explicit `repo` in `syncPullRequests`/`sync_pull_requests` or
+refresh overrides mute. Muting does not remove cached PRs or inventory. Scans still
+collect clones and update provenance. Cleanup planning (`planCleanup`,
+`plan_cleanup`, and filter-based `planActions`) defaults `includeMuted` to true;
+explicit false excludes muted repositories. Worker safety checks are unchanged.
+
+MCP adds `get_dashboard` and `set_repository_muted`; existing tool names remain
+stable. Every tool now describes its effect, target ids, background polling and
+mutation behavior, and every input property (including nested targets/filters)
+has a JSON Schema description. `start_scan` returns a scan id for `get_scan`;
+`start_agent_run` returns a run id for `get_agent_run`; sync, refresh, planning and
+apply tools return job ids for `get_job`.
+
+Upgrade: existing databases retain settings and cached data; mute defaults to off
+and owners defaults to all-owned. No production data mutation, backfill or inventory
+rescan is required to enable these read filters. Author logins were already cached.
