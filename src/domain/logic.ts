@@ -58,9 +58,10 @@ export function verdict(
     )
   )
     return clones.some((c) => c.dirty || c.active) ? "check" : "delete";
+  // An open PR is the branch's current work; an earlier merged PR only adds context (landedVia).
+  if (pr?.state === "open") return "pr-open";
   if (clones.some((c) => c.state === "pr-merged-changed"))
     return "pr-merged-changed";
-  if (pr?.state === "open") return "pr-open";
   if (clones.some((c) => c.unpushed > 0)) return "local-only";
   if (pr?.state === "closed") return "pr-closed";
   if (pr?.state === "merged") return "pr-merged-changed";
