@@ -50,3 +50,27 @@ test("migrated origin and matching remote resolve without name inference", async
     "example.com/team/project",
   );
 });
+
+test("configured origin wins over another forge's upstream regardless of settings order", async () => {
+  const forge = new ForgeService([
+    { host: "github.com", kind: "github" },
+    { host: "forge.example", kind: "forgejo" },
+  ]);
+  const remote = (name: string, key: string) => ({
+    name,
+    key,
+    url: "https://" + key + ".git",
+    pushurl: "https://" + key + ".git",
+    defaultBranch: "main",
+    fetchError: null,
+  });
+  const value = {
+    ...clone,
+    key: "forge.example/team/project",
+    remotes: [
+      remote("upstream", "github.com/team/project"),
+      remote("origin", "forge.example/team/project"),
+    ],
+  };
+  expect((await forge.resolveIdentity(value)).key).toBe(value.key);
+});

@@ -134,6 +134,12 @@ export class ForgeService {
   async resolveIdentity(
     clone: Clone,
   ): Promise<{ key: string; unrelated: string[] }> {
+    const origin = clone.remotes.find(
+      (r) =>
+        r.name === "origin" &&
+        this.config.some((f) => r.key.startsWith(f.host + "/")),
+    );
+    if (origin) return { key: origin.key, unrelated: [] };
     for (const forge of this.config) {
       const remote = clone.remotes.find((r) =>
         r.key.startsWith(forge.host + "/"),
