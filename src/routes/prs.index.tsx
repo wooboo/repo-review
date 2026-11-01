@@ -1,6 +1,6 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useCallback, useMemo } from "react";
+import { useCallback } from "react";
 import { FilterField } from "@/components/filters/field";
 import { FilterLayout, OptionSelect, Pagination, SearchInput } from "@/components/filters/controls";
 import { PageHeader } from "@/components/page-header";
@@ -10,7 +10,6 @@ import { EmptyState, ErrorState, ListSkeleton } from "@/components/states";
 import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { repoName } from "@/lib/format";
-import { paginate } from "@/lib/api/client";
 import { q } from "@/lib/queries";
 import { title } from "@/lib/route-helpers";
 import { PR_FILTER_KEYS, prListSearch, stripDefaults, validator, type PrListSearch } from "@/lib/search";
@@ -37,16 +36,9 @@ function Prs() {
   const settings = useQuery(q.settings());
   const repos = useQuery(q.repos({ pageSize: 200 }));
   const hasForges = (settings.data?.forges.length ?? 0) > 0;
-  const filter = { repo: search.repo || undefined, state: search.state, text: search.q || undefined };
-  // Server-side paging, except with a checks filter: the PR list input has none, so every page is
-  // loaded and filtered here (kept until PullRequestListInput gains `checks`).
-  const paged = useQuery({ ...q.prs({ ...filter, page: search.page, pageSize: PAGE_SIZE }), placeholderData: keepPreviousData, enabled: hasForges && !search.checks });
-  const all = useQuery({ ...q.allPrs(filter), placeholderData: keepPreviousData, enabled: hasForges && !!search.checks });
-  const prs = search.checks ? all : paged;
-  const page = useMemo(
-    () => (search.checks ? (all.data ? paginate(all.data.filter((p) => p.checks.state === search.checks), search.page, PAGE_SIZE) : undefined) : paged.data),
-    [search.checks, search.page, all.data, paged.data],
-  );
+  const filter = { repo: search.repo || undefined, state: search.state, text: search.q || undefined, checks: search.checks || undefined };
+  const prs = useQuery({ ...q.prs({ ...filter, page: search.page, pageSize: PAGE_SIZE }), placeholderData: keepPreviousData, enabled: hasForges });
+  const page = prs.data;
   const items = page?.items ?? [];
   const total = page?.total ?? 0;
   const activeCount = prListSearch.activeCount(search, PR_FILTER_KEYS);

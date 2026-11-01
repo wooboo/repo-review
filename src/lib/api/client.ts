@@ -1,6 +1,6 @@
 /** Contract v2 transport: thin typed calls of the server functions. Business logic and jobs live on the server. */
 import * as server from "@/server/functions";
-import { allPages, MAX_PAGE, paginate } from "./pages";
+import { allPages, MAX_PAGE } from "./pages";
 import type {
   AgentInfo,
   AgentRun,
@@ -46,18 +46,8 @@ export async function getRepository(id: string): Promise<RepositoryDetail> {
   return server.getRepository({ data: { id } });
 }
 
-/**
- * The UI offers several verdicts at once; ListInput accepts one. With two or more, every matching
- * page is fetched per verdict and merged here (kept until ListInput takes a verdict list).
- */
 export async function searchBranches(input: Omit<ListInput, "verdict"> & { verdicts?: readonly Verdict[] }): Promise<Page<BranchGroup>> {
-  const { verdicts = [], ...rest } = input;
-  if (verdicts.length <= 1) return server.searchBranches({ data: { ...rest, verdict: verdicts[0] } });
-  const rows = (
-    await Promise.all(verdicts.map((verdict) => allPages((page) => server.searchBranches({ data: { ...rest, verdict, page, pageSize: MAX_PAGE } }))))
-  ).flat();
-  rows.sort((a, b) => (rest.sort === "date" ? b.date.localeCompare(a.date) : a.name.localeCompare(b.name)));
-  return paginate(rows, rest.page ?? 1, rest.pageSize ?? 50);
+  return server.searchBranches({ data: input });
 }
 
 export async function allBranches(input: ListInput = {}): Promise<BranchGroup[]> {
@@ -96,8 +86,8 @@ export async function updateSettings(settings: Settings): Promise<Settings> {
 export async function getBackgroundJob<T>(id: string, result: (value: unknown) => T): Promise<Job<T> | null> {
   const job = await server.getBackgroundJob({ data: { id } });
   if (!job) return null;
-  const status = job.status === "done" ? "done" : job.status === "failed" ? "failed" : "running";
-  return { id: job.id, status, result: status === "done" ? result(job.result) : null, error: job.error ?? null };
+  const status = job.status === "paused" ? "paused" : job.status === "done" ? "done" : job.status === "failed" ? "failed" : "running";
+  return { id: job.id, status, result: status === "done" ? result(job.result) : null, error: job.error ?? null, errorType: job.errorType, retryAt: job.retryAt };
 }
 
 export async function planActions(input: PlanInput): Promise<JobRef> {

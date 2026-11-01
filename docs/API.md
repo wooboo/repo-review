@@ -315,3 +315,83 @@ Cleanup obtains fresh PR state and commit membership from the store at both plan
 and apply time. The worker independently verifies the captured branch tip, base,
 worktree and activity checks before accepting that evidence. Merge methods remain
 `unknown` when neither clone objects nor forge metadata establish the ancestry.
+
+## Contract v3.1: bounded sync and inventory corrections
+
+GitHub sync uses GraphQL PR metadata pages ordered by `UPDATED_AT DESC`. Pages stop
+at the persisted watermark (inclusive, so equal timestamps are retried). Commit
+connections are fetched in batches of ten PRs, paged in chunks of 100 (GitHub's
+maximum connection page size), and cached persistently by PR id **and head SHA**.
+Only open/merged PRs are eligible. Heads from another repository are skipped unless
+a local branch matches the head ref. Forgejo uses conditional REST requests with
+ETags; the conditional response cache lives for the application lifetime. Closed PR
+metadata is retained even when no commit list is fetched. Merge methods are inferred
+from local objects during sync; unavailable ancestry remains `unknown`.
+
+Only repositories with a configured forge and a collected clone are synced. All
+sync entry points share one queue; forge requests also run serially (global
+concurrency one). Each sync has a hard ceiling of 280 HTTP requests, across all
+repositories. No PR mutations are performed by sync.
+
+Forge configuration gains `requestReserve?: number` (nonnegative integer, default
+1000 for GitHub and 0 for Forgejo). GitHub sync first checks both REST `core` and
+GraphQL budgets. Response rate-limit headers update persisted budgets, and requests
+stop before crossing the reserve (GraphQL reserves ten points per bounded query).
+`Retry-After`, 429 responses and primary/secondary rate-limit responses pause work.
+
+`getDashboard` adds:
+
+```ts
+missingWorktrees: number;
+forgeBudgets: {
+  host: string;
+  resource: "core" | "graphql" | string;
+  remaining: number;
+  resetAt: string;
+  reserve: number;
+  pausedUntil?: string;
+}[];
+```
+
+Sync job results are `{ pullRequests, forgeBudgets }`. Rate-limited jobs have
+`status: "paused"`, `errorType: "ForgeRateLimited"`, a displayable `error`,
+`retryAt` and `result: { forgeBudgets }`. The scheduler resumes the same job after
+`retryAt`, including after restart, with its original repo/full input. The sync
+watermark advances only after the repository completes; previously completed
+commit pages remain cached on retry. Scan-triggered pauses create the same durable
+retry jobs. A 280-request safety pause retries after one hour.
+
+`/api/events` invalidations are coalesced by type and id, at most once per second.
+A sync emits `pull-requests` and `inventory` for each affected repo when its batch
+finishes, including partial failure; row writes do not emit one event per PR.
+
+Worktrees expose `missing: boolean` (derived from `!exists` for legacy snapshots).
+A missing directory is never dirty. Branch verdicts ignore its old dirty flag;
+`missingWorktrees` counts it separately. Planning deletion adds guarded
+`prune-worktree` dependencies for missing registrations. The deletion can only be
+applied once its prunes complete, and the worker still refuses a missing registration
+at apply time. Prune retains all existing index, lock, activity and global-prune
+checks. Clone ids include host and absolute clone path. Automatic T3 roots and
+threads belong only to the first enabled local host on that machine; SSH collectors
+read their own host's T3 database.
+
+Branch `commits` now contain `{ sha, subject, author, at }` objects from the collector
+(legacy string entries remain accepted). A `pr-merged-changed` clone retains these
+objects when selecting extra commits. Base branches have no `landedVia` and are
+excluded from landing `branchIds`.
+
+Additional server/MCP list inputs (applied **before** paging):
+
+| Function | Added input |
+|---|---|
+| `searchBranches` | `verdicts?: Verdict[]`, `jev?: "delete"\|"archive"\|"keep"\|"finish_and_merge"` |
+| `listPullRequests` | `checks?: "success"\|"failure"\|"pending"\|"none"` |
+| `listWorktrees` | `missing?: boolean` (`dirty` excludes missing directories) |
+| `listBranchHistory` | `text?: string` (case-insensitive history search) |
+
+The singular branch `verdict` remains supported; when both are supplied their
+constraints intersect. UI callers send these filters directly and retain server
+pagination totals.
+
+Rate-limit behavior follows [GitHub GraphQL limits](https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api)
+and [REST best practices](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api).

@@ -58,6 +58,7 @@ export function keysFor(event: LiveEvent): string[][] {
   switch (event.type) {
     case "scan":
       return [["scans"], ["inv", "dashboard"]];
+    case "pull-requests":
     case "inventory":
       return [["inv"], ["prs"], ["pr"]];
     case "job":
@@ -123,6 +124,6 @@ export function useJob<T>(id: string | null, result: (v: unknown) => T) {
   return useQuery({
     ...q.job(id ?? "", result),
     enabled: id !== null,
-    refetchInterval: (query) => (query.state.data?.status === "running" || !query.state.data ? 1000 : false),
+    refetchInterval: (query) => (["running", "paused"].includes(query.state.data?.status ?? "") || !query.state.data ? 1000 : false),
   });
 }

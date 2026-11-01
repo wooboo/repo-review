@@ -66,7 +66,7 @@ export type JobRef = { id: string };
 export type LandingMethod = LandedVia["method"];
 export type LandingVia = Landing["via"];
 export type LandingQuery = { repo: string; base?: string; since?: string; page: number; pageSize: number };
-export type BranchHistoryQuery = { repo?: string; gone?: boolean; page: number; pageSize: number };
+export type BranchHistoryQuery = { text?: string; repo?: string; gone?: boolean; page: number; pageSize: number };
 
 // ---------- inventory read models
 
@@ -155,6 +155,9 @@ export type Dashboard = {
 // ---------- list input
 
 export type ListInput = {
+  missing?: boolean;
+  jev?: "delete" | "archive" | "keep" | "finish_and_merge";
+  verdicts?: readonly Verdict[];
   text?: string;
   host?: string;
   repo?: string;
@@ -175,6 +178,7 @@ export type PullRequestState = PullRequest["state"];
 export type ReviewState = PullRequest["review"];
 export type PullRequestFile = PullRequestDetail["files"][number];
 export type PullRequestQuery = {
+  checks?: ChecksState;
   repo?: string;
   state?: PullRequestState | "all";
   text?: string;
@@ -193,8 +197,8 @@ export type PlanInput = {
   targets?: ActionTarget[];
 };
 
-export type JobStatus = "running" | "done" | "failed";
-export type Job<T> = { id: string; status: JobStatus; result: T | null; error: string | null };
+export type JobStatus = "running" | "done" | "failed" | "paused";
+export type Job<T> = { id: string; status: JobStatus; result: T | null; error: string | null; errorType?: "ForgeRateLimited"; retryAt?: string };
 
 // ---------- agents
 
@@ -204,4 +208,4 @@ export type AgentEventKind = AgentEvent["kind"];
 export type AgentRunDetail = { run: AgentRun; events: readonly AgentEvent[]; cursor: number };
 export type AgentRunQuery = { status?: AgentRunStatus; repo?: string; page: number; pageSize: number };
 
-export type LiveEvent = { type: "scan" | "job" | "agent-run" | "inventory"; id: string };
+export type LiveEvent = { type: "scan" | "job" | "agent-run" | "inventory" | "pull-requests"; id: string };

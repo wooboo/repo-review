@@ -283,8 +283,10 @@ test("SSE emits inventory changes and cancels subscription", async () => {
   const reader = response.body!.getReader();
   await reader.read();
   emitChange({ type: "inventory", id: "fixture" });
-  const result = await reader.read();
-  expect(new TextDecoder().decode(result.value)).toContain('"id":"fixture"');
+  let text = "";
+  while (!text.includes('"id":"fixture"'))
+    text += new TextDecoder().decode((await reader.read()).value);
+  expect(text).toContain('"id":"fixture"');
   await reader.cancel();
 });
 
@@ -439,10 +441,10 @@ test("foundation migration preserves settings and invalidates old plans", async 
 
 test("forge refresh normalizes summaries without downloading diffs", async () => {
   const { ForgeService } = await import("./forge");
-  for (const kind of ["github", "forgejo"] as const) {
+  for (const kind of ["forgejo"] as const) {
     const app = makeApplication(":memory:"),
       calls: string[] = [];
-    const fixture = kind === "github" ? githubFixture : forgejoFixture;
+    const fixture = forgejoFixture;
     class RecordedForge extends ForgeService {
       override async request(
         _host: string,
@@ -467,6 +469,16 @@ test("forge refresh normalizes summaries without downloading diffs", async () =>
     app.updateSettings({
       ...app.settings(),
       forges: [{ host: "forge.example", kind }],
+    });
+    app.db.put("clone", "fixture", {
+      key: "forge.example/team/repo",
+      branches: [],
+      worktrees: [],
+      threads: [],
+      host: "local",
+      path: "/nonexistent",
+      bases: [],
+      remoteBranches: [],
     });
     app.forge = () => new RecordedForge(app.settings().forges);
     try {

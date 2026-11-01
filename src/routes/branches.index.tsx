@@ -14,7 +14,6 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { State } from "@/lib/api/types";
 import { repoName } from "@/lib/format";
 import { q } from "@/lib/queries";
-import { matchHistory } from "@/lib/provenance";
 import { title } from "@/lib/route-helpers";
 import { BRANCH_FILTER_KEYS, branchSearch, stripDefaults, validator, type BranchSearch } from "@/lib/search";
 import { cn } from "@/lib/utils";
@@ -45,6 +44,7 @@ function Branches() {
   const input = {
     text: search.q || undefined,
     verdicts: search.verdict,
+    jev: search.jev || undefined,
     host: search.host || undefined,
     repo: search.repo || undefined,
     state: search.state || undefined,
@@ -56,12 +56,10 @@ function Branches() {
     pageSize: PAGE_SIZE,
   };
   const branches = useQuery({ ...q.branches(input), placeholderData: keepPreviousData, enabled: !gone });
-  // The history list has no text filter; search runs on the loaded page.
-  const history = useQuery({ ...q.history({ repo: search.repo || undefined, gone: true, page: search.page, pageSize: PAGE_SIZE }), placeholderData: keepPreviousData, enabled: gone });
+  const history = useQuery({ ...q.history({ text: search.q || undefined, repo: search.repo || undefined, gone: true, page: search.page, pageSize: PAGE_SIZE }), placeholderData: keepPreviousData, enabled: gone });
   const prs = usePrsByBranch();
-  // ListInput has no `jev` filter, so it is applied to the loaded page (kept until the server takes it).
-  const items = useMemo(() => (branches.data?.items ?? []).filter((b) => !search.jev || b.jev?.recommendation === search.jev), [branches.data, search.jev]);
-  const goneItems = useMemo(() => (history.data?.items ?? []).filter((h) => matchHistory(h, search.q)), [history.data, search.q]);
+  const items = branches.data?.items ?? [];
+  const goneItems = history.data?.items ?? [];
   const max = useMemo(() => divergenceMax(items), [items]);
   const filterKeys = gone ? (["repo"] as const) : BRANCH_FILTER_KEYS;
   const activeCount = branchSearch.activeCount(search, filterKeys);

@@ -102,10 +102,15 @@ export async function callTool(
       return app.getCommitProvenance(decode(CommitProvenanceInput));
     case "list_branch_history":
       return app.listBranchHistory(decode(BranchHistoryInput));
-    case "sync_pull_requests":
-      return startJob(app, "sync-pull-requests", () =>
-        app.syncPullRequests(decode(SyncPullRequestsInput)),
+    case "sync_pull_requests": {
+      const input = decode(SyncPullRequestsInput);
+      return startJob(
+        app,
+        "sync-pull-requests",
+        () => app.syncPullRequests(input),
+        input,
       );
+    }
 
     case "list_hosts":
       decode(empty);
@@ -169,10 +174,15 @@ export async function callTool(
       return app.listPullRequests(decode(PullRequestListInput));
     case "get_pull_request":
       return app.getPullRequest(decode(IdInput).id);
-    case "refresh_pull_requests":
-      return startJob(app, "refresh-pull-requests", () =>
-        app.refreshPullRequests(decode(toolSchemas.refresh_pull_requests).repo),
+    case "refresh_pull_requests": {
+      const input = decode(toolSchemas.refresh_pull_requests);
+      return startJob(
+        app,
+        "refresh-pull-requests",
+        () => app.refreshPullRequests(input.repo),
+        input,
       );
+    }
     case "create_pull_request":
       return app.createPullRequest(decode(CreatePullRequestInput));
     case "merge_pull_request":

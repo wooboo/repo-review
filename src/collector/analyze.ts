@@ -71,6 +71,7 @@ export function worktree(
     submodules: exists
       ? out(path, "submodule", "status").split("\n").filter(Boolean)
       : [],
+    missing: !exists,
     dirty: exists && (total > 0 || status.code !== 0),
     files,
     total,
@@ -212,9 +213,19 @@ export function analyzeBranch(
     a.state = "merged";
     return a;
   }
-  a.commits = out(path, "log", "-25", "--format=%h %aI %s", `${base}..${sha}`)
+  a.commits = out(
+    path,
+    "log",
+    "-25",
+    "--format=%H%x00%aI%x00%s%x00%an",
+    `${base}..${sha}`,
+  )
     .split("\n")
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((line) => {
+      const [sha, at, subject, author] = line.split("\0");
+      return { sha, at, subject, author };
+    });
   a.diffstat = mergeBase
     ? out(path, "diff", "--shortstat", mergeBase, sha)
     : "";

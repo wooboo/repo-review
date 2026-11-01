@@ -20,7 +20,7 @@ export function SyncPrsButton({ repo, className }: { repo?: string; className?: 
     void client.invalidateQueries({ queryKey: ["pr"] });
     void client.invalidateQueries({ queryKey: ["inv"] });
   }, [status, client]);
-  const error = sync.error ?? (status === "failed" ? job.data?.error : null);
+  const error = sync.error ?? (status === "failed" || status === "paused" ? job.data?.error : null);
   return (
     <span className={cn("flex flex-col items-end gap-1", className)}>
       <Button variant="outline" className="h-11 md:h-9" disabled={running} onClick={() => sync.mutate()}>

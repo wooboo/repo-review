@@ -116,8 +116,11 @@ export const refreshPullRequests = createServerFn({ method: "POST" })
   .validator(valid(Schema.Struct({ repo: Schema.optional(Schema.String) })))
   .handler(({ data }) =>
     withApp((a) =>
-      startJob(a, "refresh-pull-requests", () =>
-        a.refreshPullRequests(data.repo),
+      startJob(
+        a,
+        "refresh-pull-requests",
+        () => a.refreshPullRequests(data.repo),
+        data,
       ),
     ),
   );
@@ -164,6 +167,6 @@ export const syncPullRequests = createServerFn({ method: "POST" })
   .validator(valid(SyncPullRequestsInput))
   .handler(({ data }) =>
     withApp((a) =>
-      startJob(a, "sync-pull-requests", () => a.syncPullRequests(data)),
+      startJob(a, "sync-pull-requests", () => a.syncPullRequests(data), data),
     ),
   );

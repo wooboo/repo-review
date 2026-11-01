@@ -92,6 +92,7 @@ export async function inferMergeMethod(
   app: ApplicationApi,
   repo: string,
   pr: PullRequest,
+  allowForge = true,
 ): Promise<NonNullable<PullRequest["mergeMethod"]>> {
   if (!pr.mergeCommitSha || pr.state !== "merged") return "unknown";
   for (const clone of app.db
@@ -121,6 +122,7 @@ export async function inferMergeMethod(
       return ancestor === pr.headSha ? "merge" : "unknown";
     return ancestor === pr.headSha ? "rebase" : "squash";
   }
+  if (!allowForge) return "unknown";
   try {
     const [host, ...parts] = repo.split("/"),
       root = "/repos/" + parts.join("/");
@@ -195,7 +197,7 @@ export async function rebuildProvenance(app: ApplicationApi, repo: string) {
       return tips.get(sha)!;
     };
     for (const branch of [...clone.branches, ...clone.remoteBranches]) {
-      const landedVia = await link(branch.sha);
+      const landedVia = branch.state === "base" ? null : await link(branch.sha);
       app.db.put(
         "provenance",
         JSON.stringify([clone.host, clone.path, branch.name]),
@@ -215,7 +217,14 @@ export async function rebuildProvenance(app: ApplicationApi, repo: string) {
       app.db.put(
         "branch_history",
         JSON.stringify([h.host, h.clonePath, h.branch, h.sha]),
-        { ...h, landedVia: await link(h.sha) },
+        {
+          ...h,
+          landedVia: clone.bases.some(
+            (b) => b === h.branch || b.replace(/^[^/]+\//, "") === h.branch,
+          )
+            ? null
+            : await link(h.sha),
+        },
       );
   }
   const allHistory = app.db
@@ -261,6 +270,13 @@ export async function rebuildProvenance(app: ApplicationApi, repo: string) {
         const branchIds = [
           ...new Set(
             allHistory
+              .filter(
+                (h) =>
+                  !clone.bases.some(
+                    (b) =>
+                      b === h.branch || b.replace(/^[^/]+\//, "") === h.branch,
+                  ),
+              )
               .filter((h) =>
                 pr
                   ? h.landedVia?.pullRequestId === pr.id

@@ -75,6 +75,26 @@ export async function planActions(
         remote: target.remote ?? "origin",
       };
     }
+    if (action.deletion) {
+      const missing = clone.worktrees.filter(
+        (w) => w.branch === b?.name && !w.exists,
+      );
+      const prunes: WorkerAction[] = [];
+      for (const w of missing) {
+        const prune: WorkerAction = {
+          ...action,
+          id: crypto.randomUUID(),
+          kind: "prune-worktree",
+          target: { ...target, worktree: w.path },
+          deletion: undefined,
+        };
+        const planned = await runPlanned(app, prune, false);
+        result.push(planned);
+        if (planned.status === "planned") prunes.push(prune);
+      }
+      action.plannedPrunes = prunes;
+      action.dependsOn = prunes.map((p) => p.id);
+    }
     result.push(await runPlanned(app, action, false));
   }
   return result;
@@ -157,6 +177,20 @@ export async function applyActions(
     const action = app.db.get<WorkerAction>("action", id);
     if (!action || action.status !== "planned")
       throw new ActionError({ message: "Only planned actions can be applied" });
+    if (
+      action.dependsOn?.some(
+        (id) => app.db.get<WorkerAction>("action", id)?.status !== "done",
+      )
+    ) {
+      const blocked = {
+        ...action,
+        status: "blocked" as const,
+        reason: "Prune dependencies must finish before branch deletion",
+      };
+      app.db.put("action", id, blocked);
+      result.push(blocked);
+      continue;
+    }
     app.db.put("action", id, { ...action, status: "running" });
     try {
       result.push(await runPlanned(app, action, true));

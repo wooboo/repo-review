@@ -1,3 +1,4 @@
+import { resumeSyncJobs, startJob } from "./jobs";
 import { rebuildProvenance, pageItems } from "./provenance";
 import type { LandedVia, Landing, BranchHistoryItem } from "../domain/model";
 import { subsystemLayers } from "./services";
@@ -22,6 +23,11 @@ import {
   landedState,
 } from "../domain/logic";
 import { runHost } from "./hosts";
+import {
+  BudgetGuard,
+  ForgeRateLimited,
+  type ForgeBudget,
+} from "./forge-budget";
 import { ForgeService } from "./forge";
 export type StoredClone = Clone & { host: string };
 export type Job = {
@@ -75,7 +81,25 @@ export function makeApplication(path?: string) {
   let timer: ReturnType<typeof setInterval> | undefined;
   const settings = () =>
     Schema.decodeUnknownSync(Settings)(db.get("settings", "main"));
-  const clones = () => db.list<StoredClone>("clone");
+  const budgets = new BudgetGuard(
+    (b) => db.put("settings", "forge-budget:" + b.host + ":" + b.resource, b),
+    db
+      .list<ForgeBudget>("settings")
+      .filter(
+        (b) => typeof b.host === "string" && typeof b.resource === "string",
+      ),
+  );
+  let forgeService: ForgeService | undefined,
+    forgeConfig = "";
+  const clones = () =>
+    db.list<StoredClone>("clone").map((c) => ({
+      ...c,
+      worktrees: c.worktrees.map((w) => ({
+        ...w,
+        missing: !w.exists,
+        dirty: w.exists && w.dirty,
+      })),
+    }));
   const branchRows = () => {
     const config = settings();
     const runs = db
@@ -117,15 +141,23 @@ export function makeApplication(path?: string) {
       branch: Clone["branches"][number],
     ) => {
       const landedVia =
-        provenance.get(
-          JSON.stringify([clone.host, clone.path, branch.name, branch.sha]),
-        ) ?? null;
+        branch.state === "base"
+          ? null
+          : (provenance.get(
+              JSON.stringify([clone.host, clone.path, branch.name, branch.sha]),
+            ) ?? null);
       return {
         ...branch,
         landedVia,
         commits:
           landedVia?.extraCommits && !integrated(branch.state)
-            ? landedVia.extraCommitShas
+            ? branch.commits.filter((c) =>
+                landedVia.extraCommitShas.some((sha) =>
+                  sha.startsWith(
+                    typeof c === "string" ? c.split(" ")[0] : c.sha,
+                  ),
+                ),
+              )
             : branch.commits,
         state: landedState(branch.state, landedVia),
       };
@@ -230,6 +262,16 @@ export function makeApplication(path?: string) {
       const valid = Schema.decodeUnknownSync(Settings)(value);
       if (new Set(valid.hosts.map((h) => h.id)).size !== valid.hosts.length)
         throw new SettingsError({ message: "Duplicate host id" });
+      if (
+        valid.forges.some(
+          (f) =>
+            f.requestReserve !== undefined &&
+            (!Number.isInteger(f.requestReserve) || f.requestReserve < 0),
+        )
+      )
+        throw new SettingsError({
+          message: "Forge request reserve must be a nonnegative integer",
+        });
       db.put("settings", "main", valid);
       return valid;
     },
@@ -283,8 +325,10 @@ export function makeApplication(path?: string) {
           ...c,
           remoteBranches: c.remoteBranches.map((b) => {
             const landedVia =
-              links.get(JSON.stringify([c.host, c.path, b.name, b.sha])) ??
-              null;
+              b.state === "base"
+                ? null
+                : (links.get(JSON.stringify([c.host, c.path, b.name, b.sha])) ??
+                  null);
             return {
               ...b,
               landedVia,
@@ -317,6 +361,8 @@ export function makeApplication(path?: string) {
             (!input.repo || b.repo === input.repo) &&
             (!input.host || b.clones.some((c) => c.host === input.host)) &&
             (!input.verdict || b.verdict === input.verdict) &&
+            (!input.verdicts?.length || input.verdicts.includes(b.verdict)) &&
+            (!input.jev || b.jev?.recommendation === input.jev) &&
             (!input.state || b.clones.some((c) => c.state === input.state)) &&
             (input.stale === undefined || b.stale === input.stale) &&
             (input.dirty === undefined || b.dirty === input.dirty) &&
@@ -345,13 +391,21 @@ export function makeApplication(path?: string) {
               repo: c.key,
             })),
           )
-          .filter((w) => input.dirty === undefined || w.dirty === input.dirty),
+          .filter(
+            (w) =>
+              (input.dirty === undefined || w.dirty === input.dirty) &&
+              (input.missing === undefined || w.missing === input.missing),
+          ),
         input,
       );
     },
     dashboard() {
       const branches = branchRows();
       return {
+        forgeBudgets: [...budgets.budgets.values()],
+        missingWorktrees: clones()
+          .flatMap((c) => c.worktrees)
+          .filter((w) => w.missing).length,
         openPullRequests: db
           .list<PullRequest>("pull_request")
           .filter((p) => p.state === "open").length,
@@ -427,6 +481,13 @@ export function makeApplication(path?: string) {
                     host.id,
                     ...host.roots.flatMap((r) => ["--root", r]),
                     input.fetch ? "--fetch" : "--no-fetch",
+                    ...(host.kind === "local" &&
+                    host.id !==
+                      settings().hosts.find(
+                        (h) => h.kind === "local" && h.enabled,
+                      )?.id
+                      ? ["--no-t3"]
+                      : []),
                   ],
                   (event) => {
                     const e = event as { type: string; snapshot?: unknown };
@@ -437,7 +498,7 @@ export function makeApplication(path?: string) {
                   },
                 );
                 if (!snapshot) throw Error("Host returned no snapshot");
-                const forge = new ForgeService(settings().forges);
+                const forge = api.forge();
                 const resolved = [];
                 for (const c of snapshot.repositories) {
                   const identity = await forge.resolveIdentity(c);
@@ -450,8 +511,27 @@ export function makeApplication(path?: string) {
                   ) {
                     try {
                       await api.refreshPullRequests(key);
-                    } catch {
-                      job.events.push({ type: "forge-unavailable", repo: key });
+                    } catch (error) {
+                      if (error instanceof ForgeRateLimited) {
+                        const retry = startJob(
+                          api,
+                          "sync-pull-requests",
+                          async () => {
+                            throw error;
+                          },
+                          { repo: key },
+                        );
+                        job.events.push({
+                          type: "forge-rate-limited",
+                          repo: key,
+                          jobId: retry.id,
+                          retryAt: error.retryAt,
+                        });
+                      } else
+                        job.events.push({
+                          type: "forge-unavailable",
+                          repo: key,
+                        });
                       await rebuildProvenance(api, key);
                     }
                   } else await rebuildProvenance(api, key);
@@ -531,6 +611,10 @@ export function makeApplication(path?: string) {
           .filter(
             (h) =>
               (!input.repo || h.repo === input.repo) &&
+              (!input.text ||
+                JSON.stringify(h)
+                  .toLowerCase()
+                  .includes(input.text.toLowerCase())) &&
               (input.gone === undefined || Boolean(h.goneAt) === input.gone),
           )
           .sort((a, b) => b.lastSeen.localeCompare(a.lastSeen)),
@@ -602,9 +686,16 @@ export function makeApplication(path?: string) {
       return prs.refreshPullRequests(api, key);
     },
     forge() {
-      return new ForgeService(settings().forges);
+      const config = settings().forges,
+        encoded = JSON.stringify(config);
+      if (!forgeService || forgeConfig !== encoded) {
+        forgeService = new ForgeService(config, budgets);
+        forgeConfig = encoded;
+      }
+      return forgeService;
     },
     runScheduled(now = new Date()) {
+      resumeSyncJobs(api, now);
       const day = now.toISOString().slice(0, 10);
       if (process.env.BACKUP_DIR && db.get("schedule", "backup-day") !== day) {
         db.backup(process.env.BACKUP_DIR);

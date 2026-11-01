@@ -98,6 +98,7 @@ export function openRepository(
         status?: string;
         state?: string;
         text?: string;
+        checks?: string;
         page?: number;
         pageSize?: number;
       } = {},
@@ -111,6 +112,9 @@ export function openRepository(
         input.status ? eq(t.status, input.status) : undefined,
         input.state && input.state !== "all"
           ? eq(t.state, input.state)
+          : undefined,
+        input.checks
+          ? sql`json_extract(${t.json}, '$.checks.state') = ${input.checks}`
           : undefined,
         input.text
           ? sql`instr(lower(${t.json}), lower(${input.text})) > 0`
@@ -200,7 +204,10 @@ export function openRepository(
             : kind === "agent" || kind === "agent_event"
               ? "agent-run"
               : "inventory";
-      emitChange({ type, id: kind === "agent_event" ? String(v.runId) : id });
+      if (["scan", "job", "agent", "agent_event"].includes(kind))
+        emitChange({ type, id: kind === "agent_event" ? String(v.runId) : id });
+      else if (["description", "classification", "settings"].includes(kind))
+        emitChange({ type: "inventory", id: repo || kind });
     },
     replaceHost(host: string, clones: readonly { path: string }[]) {
       db.transaction(() => {
@@ -255,7 +262,21 @@ export function openRepository(
           const c = value as import("../domain/model").Clone;
           const id = host + ":" + c.path;
           api.put("repository", c.key, { key: c.key, name: c.name });
-          api.put("clone", id, { ...c, host }, host);
+          api.put(
+            "clone",
+            id,
+            {
+              ...c,
+              id,
+              host,
+              worktrees: c.worktrees.map((w) => ({
+                ...w,
+                missing: !w.exists,
+                dirty: w.exists && w.dirty,
+              })),
+            },
+            host,
+          );
           for (const b of c.branches) {
             api.put("branch", c.key + "#" + b.name, {
               repo: c.key,

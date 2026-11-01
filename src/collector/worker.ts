@@ -10,6 +10,7 @@ export function execute(
   item: Action,
   apply: boolean,
   options: {
+    plannedPrunes?: WorkerAction[];
     t3?: boolean;
     cwds?: string[];
     activeBranches?: string[];
@@ -84,6 +85,13 @@ export function execute(
     const mine = rows.filter((r) => r.branch === ref);
     for (const row of mine) {
       const w = worktree(row.worktree, row, row.worktree === rows[0]?.worktree);
+      if (!apply && !w.exists) {
+        const prune = options.plannedPrunes?.find(
+          (p) => p.target.worktree === w.path && p.target.repo === item.repo,
+        );
+        if (prune && executeExtra(prune, false, options).status === "planned")
+          continue;
+      }
       if (w.main) return result("skipped", "Main checkout");
       if (
         !w.exists ||
@@ -152,7 +160,9 @@ if (import.meta.main) {
             ? item.deletion
               ? {
                   ...item,
-                  ...execute(item.deletion, payload.apply),
+                  ...execute(item.deletion, payload.apply, {
+                    plannedPrunes: item.plannedPrunes,
+                  }),
                   finishedAt: payload.apply ? new Date().toISOString() : null,
                 }
               : executeExtra(item, payload.apply)

@@ -34,8 +34,7 @@ function Worktrees() {
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
   const update = useCallback((patch: Partial<WorktreeSearch>, replace = false) => void navigate({ search: (prev) => ({ ...prev, ...patch }), replace }), [navigate]);
-  // The server's `dirty` filter also matches missing directories, so status is filtered here.
-  const rows = useQuery(q.worktrees({ host: search.host || undefined, repo: search.repo || undefined, text: search.q || undefined }));
+  const rows = useQuery(q.worktrees({ host: search.host || undefined, repo: search.repo || undefined, text: search.q || undefined, dirty: search.status === "changes" ? true : search.status === "clean" ? false : undefined, missing: search.status === "missing" ? true : search.status === "clean" ? false : undefined }));
   const settings = useQuery(q.settings());
   const repos = useQuery(q.repos({ pageSize: 200 }));
   const branches = useQuery(q.allBranches());

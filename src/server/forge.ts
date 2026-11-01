@@ -33,9 +33,30 @@ async function commandToken(host: string, command: string) {
 }
 import type { Forge, Clone } from "../domain/model";
 import { normalizeUrl } from "../domain/logic";
+import { BudgetGuard, ForgeRateLimited } from "./forge-budget";
 export class ForgeService {
-  constructor(private readonly config: readonly Forge[]) {}
-  async request(
+  private queue: Promise<unknown> = Promise.resolve();
+  syncRequests = 0;
+  syncActive = false;
+  private readonly etags = new Map<string, { etag: string; value: unknown }>();
+  constructor(
+    private readonly config: readonly Forge[],
+    readonly budget = new BudgetGuard(),
+  ) {}
+  request(
+    host: string,
+    path: string,
+    method = "GET",
+    body?: unknown,
+    raw = false,
+  ): Promise<unknown> {
+    const next = this.queue
+      .catch(() => {})
+      .then(() => this.requestImpl(host, path, method, body, raw));
+    this.queue = next;
+    return next;
+  }
+  private async requestImpl(
     host: string,
     path: string,
     method = "GET",
@@ -44,6 +65,23 @@ export class ForgeService {
   ): Promise<unknown> {
     const f = this.config.find((f) => f.host === host);
     if (!f) throw new ForgeUnavailable({ message: "Forge not configured" });
+    if (this.syncActive && ++this.syncRequests > 280) {
+      const retryAt = new Date(Date.now() + 3600000).toISOString();
+      throw new ForgeRateLimited({
+        host,
+        retryAt,
+        message: `Forge sync paused at 280-request safety budget until ${retryAt}`,
+      });
+    }
+    const resource = path === "/graphql" ? "graphql" : "core";
+    const reserve = Math.max(
+      0,
+      f.requestReserve ?? (f.kind === "github" ? 1000 : 0),
+    );
+    this.budget.check(host, resource, resource === "graphql" ? 10 : 1, reserve);
+    const cacheKey = host + path;
+    const cached =
+      method === "GET" && !raw ? this.etags.get(cacheKey) : undefined;
     let token = f.tokenEnv ? process.env[f.tokenEnv] : undefined;
     if (f.tokenCommand) {
       token = await commandToken(f.host, f.tokenCommand);
@@ -55,6 +93,7 @@ export class ForgeService {
     const response = await fetch(base + path, {
       method,
       headers: {
+        ...(cached ? { "If-None-Match": cached.etag } : {}),
         Accept: raw ? "application/vnd.github.diff" : "application/json",
         ...(token
           ? {
@@ -70,6 +109,8 @@ export class ForgeService {
         message: e instanceof Error ? e.message : "Forge request failed",
       });
     });
+    this.budget.observe(host, resource, response, reserve);
+    if (response.status === 304 && cached) return cached.value;
     if (!response.ok) {
       const payload = (await response
         .json()
@@ -77,20 +118,124 @@ export class ForgeService {
         message?: string;
       };
       const message = payload.message ?? `Forge HTTP ${response.status}`;
+      if (
+        response.status === 403 &&
+        /secondary|rate limit|abuse/i.test(message)
+      ) {
+        const retryAt = new Date(Date.now() + 60000).toISOString();
+        this.budget.update(host, resource, 0, retryAt, reserve, retryAt);
+        throw new ForgeRateLimited({
+          host,
+          retryAt,
+          message: `Forge sync paused for rate limit until ${retryAt}`,
+        });
+      }
       if (response.status === 404) throw new NotFound({ message });
       if (response.status >= 500) throw new ForgeUnavailable({ message });
       throw new ForgeRejected({ message });
     }
-    return raw
-      ? response.text()
+    const value = raw
+      ? await response.text()
       : response.status === 204
         ? null
-        : response.json();
+        : await response.json();
+    const etag = response.headers.get("etag");
+    if (method === "GET" && !raw && etag)
+      this.etags.set(cacheKey, { etag, value });
+    return value;
   }
+  async prepare(host: string) {
+    if (this.config.find((f) => f.host === host)?.kind !== "github") return;
+    const limits = (await this.request(host, "/rate_limit")) as {
+      resources: Record<string, { remaining: number; reset: number }>;
+    };
+    for (const resource of ["core", "graphql"]) {
+      const b = limits.resources[resource];
+      if (b)
+        this.budget.update(
+          host,
+          resource,
+          b.remaining,
+          new Date(b.reset * 1000).toISOString(),
+          this.config.find((f) => f.host === host)?.requestReserve ?? 1000,
+        );
+      this.budget.check(host, resource, resource === "graphql" ? 10 : 1);
+    }
+  }
+  async graphql(host: string, query: string) {
+    const r = (await this.request(host, "/graphql", "POST", { query })) as {
+      data?: Record<string, unknown>;
+      errors?: { message: string; type?: string }[];
+    };
+    if (r.errors?.length) {
+      if (
+        r.errors.some(
+          (e) => e.type === "RATE_LIMITED" || /rate limit/i.test(e.message),
+        )
+      ) {
+        const retryAt = new Date(
+          Math.max(
+            Date.now() + 60000,
+            Date.parse(
+              this.budget.budgets.get(host + ":graphql")?.resetAt ?? "",
+            ) || 0,
+          ),
+        ).toISOString();
+        this.budget.update(
+          host,
+          "graphql",
+          0,
+          retryAt,
+          this.config.find((f) => f.host === host)?.requestReserve ?? 1000,
+          retryAt,
+        );
+        throw new ForgeRateLimited({
+          host,
+          retryAt,
+          message: `Forge sync paused for rate limit until ${retryAt}`,
+        });
+      }
+      throw new ForgeRejected({
+        message: r.errors.map((e) => e.message).join("; "),
+      });
+    }
+    if (!r.data) throw new ForgeRejected({ message: "Missing GraphQL data" });
+    return r.data;
+  }
+
   async listPullRequests(key: string, since?: string) {
     const [host, ...parts] = key.split("/");
     const repo = parts.join("/");
     const rows: unknown[] = [];
+    if (this.config.find((f) => f.host === host)?.kind === "github") {
+      let cursor: string | null = null;
+      do {
+        const data = await this.graphql(
+          host,
+          `query { repository(owner:${JSON.stringify(parts[0])}, name:${JSON.stringify(parts[1])}) { pullRequests(first:100, orderBy:{field:UPDATED_AT,direction:DESC}, after:${JSON.stringify(cursor)}) { nodes { number title url state isDraft headRefName headRefOid headRepository { nameWithOwner } baseRefName createdAt updatedAt mergedAt mergeCommit { oid } author { login } mergeable reviewDecision commits(last:1) { nodes { commit { statusCheckRollup { state } } } } } pageInfo { hasNextPage endCursor } } } }`,
+        );
+        const connection = (
+          data.repository as {
+            pullRequests: {
+              nodes: GithubPull[];
+              pageInfo: { hasNextPage: boolean; endCursor: string };
+            };
+          }
+        ).pullRequests;
+        rows.push(
+          ...connection.nodes
+            .filter((p) => !since || p.updatedAt >= since)
+            .map(mapGithubPull),
+        );
+        if (
+          connection.nodes.some((p) => since && p.updatedAt < since) ||
+          !connection.pageInfo.hasNextPage
+        )
+          break;
+        cursor = connection.pageInfo.endCursor;
+      } while (cursor);
+      return rows;
+    }
     const sort =
       this.config.find((f) => f.host === host)?.kind === "forgejo"
         ? "recentupdate"
@@ -221,4 +366,51 @@ export class ForgeService {
     }
     return { key: clone.key, unrelated: [] };
   }
+}
+
+export type GithubPull = {
+  number: number;
+  title: string;
+  url: string;
+  state: string;
+  isDraft: boolean;
+  headRefName: string;
+  headRefOid: string;
+  headRepository: { nameWithOwner: string } | null;
+  baseRefName: string;
+  createdAt: string;
+  updatedAt: string;
+  mergedAt: string | null;
+  mergeCommit: { oid: string } | null;
+  author: { login: string } | null;
+  mergeable: string;
+  reviewDecision?: string;
+  commits?: {
+    nodes: { commit: { statusCheckRollup: { state: string } | null } }[];
+  };
+};
+export function mapGithubPull(p: GithubPull) {
+  return {
+    number: p.number,
+    title: p.title,
+    html_url: p.url,
+    state: p.state === "OPEN" ? "open" : "closed",
+    draft: p.isDraft,
+    head: {
+      ref: p.headRefName,
+      sha: p.headRefOid,
+      repo: { full_name: p.headRepository?.nameWithOwner },
+    },
+    base: { ref: p.baseRefName },
+    created_at: p.createdAt,
+    updated_at: p.updatedAt,
+    merged_at: p.mergedAt,
+    merge_commit_sha: p.mergeCommit?.oid ?? null,
+    user: p.author,
+    mergeable: p.mergeable === "UNKNOWN" ? null : p.mergeable === "MERGEABLE",
+    reviewDecision: p.reviewDecision,
+    checkState:
+      p.commits?.nodes[0]?.commit.statusCheckRollup?.state?.toLowerCase() ??
+      "none",
+  };
 }

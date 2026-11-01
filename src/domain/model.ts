@@ -34,10 +34,20 @@ export type Host = typeof Host.Type;
 export const Forge = Schema.Struct({
   host: Schema.String,
   kind: Schema.Literals(["github", "forgejo"]),
+  requestReserve: Schema.optional(Schema.Number),
   tokenEnv: Schema.optional(Schema.String),
   tokenCommand: Schema.optional(Schema.String),
 });
 export type Forge = typeof Forge.Type;
+export const ForgeBudget = Schema.Struct({
+  host: Schema.String,
+  resource: Schema.String,
+  remaining: Schema.Number,
+  resetAt: Schema.String,
+  reserve: Schema.Number,
+  pausedUntil: Schema.optional(Schema.String),
+});
+export type ForgeBudget = typeof ForgeBudget.Type;
 export const Agent = Schema.Struct({
   id: Schema.String,
   label: Schema.String,
@@ -79,6 +89,7 @@ export const Worktree = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
   main: Schema.Boolean,
   exists: Schema.Boolean,
+  missing: Schema.optional(Schema.Boolean),
   locked: Schema.Boolean,
   prunable: Schema.Boolean,
   detached: Schema.Boolean,
@@ -181,7 +192,7 @@ export const Branch = Schema.Struct({
   state: State,
   squashCommit: Schema.NullOr(Schema.String),
   containedIn: Schema.Array(Schema.String),
-  commits: Schema.Array(Schema.String),
+  commits: Schema.Array(Schema.Union([Schema.String, PullRequestCommit])),
   diffstat: Schema.String,
   residual: Schema.String,
 });
@@ -266,6 +277,11 @@ export const ListInput = Schema.Struct({
   host: Schema.optional(Schema.String),
   repo: Schema.optional(Schema.String),
   verdict: Schema.optional(Verdict),
+  verdicts: Schema.optional(Schema.Array(Verdict)),
+  jev: Schema.optional(
+    Schema.Literals(["delete", "archive", "keep", "finish_and_merge"]),
+  ),
+  missing: Schema.optional(Schema.Boolean),
   state: Schema.optional(State),
   stale: Schema.optional(Schema.Boolean),
   dirty: Schema.optional(Schema.Boolean),
@@ -380,6 +396,9 @@ export const PageInput = Schema.Struct({
   pageSize: Schema.optional(Schema.Number),
 });
 export const PullRequestListInput = Schema.Struct({
+  checks: Schema.optional(
+    Schema.Literals(["success", "failure", "pending", "none"]),
+  ),
   ...PageInput.fields,
   repo: Schema.optional(Schema.String),
   state: Schema.optional(Schema.Literals(["open", "closed", "merged", "all"])),
@@ -537,6 +556,7 @@ export const CommitProvenanceInput = Schema.Struct({
   sha: Schema.String,
 });
 export const BranchHistoryInput = Schema.Struct({
+  text: Schema.optional(Schema.String),
   ...PageInput.fields,
   repo: Schema.optional(Schema.String),
   gone: Schema.optional(Schema.Boolean),

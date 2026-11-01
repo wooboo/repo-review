@@ -1,0 +1,19 @@
+{
+  "number": 7,
+  "title": "Feature",
+  "url": "https://github.com/example/project/pull/7",
+  "state": "MERGED",
+  "isDraft": false,
+  "headRefName": "topic",
+  "headRefOid": "head-one",
+  "headRepository": { "nameWithOwner": "example/project" },
+  "baseRefName": "main",
+  "createdAt": "2026-01-01T00:00:00Z",
+  "updatedAt": "2026-01-02T00:00:00Z",
+  "mergedAt": "2026-01-02T00:00:00Z",
+  "mergeCommit": { "oid": "squash-one" },
+  "author": { "login": "fixture-user" },
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "APPROVED",
+  "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "state": "SUCCESS" } } }] }
+}

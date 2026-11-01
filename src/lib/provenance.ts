@@ -47,7 +47,7 @@ export type CommitLine = ReturnType<typeof parseCommit>;
  * at most 25 commits newest first, so when the SHAs cannot be matched the newest K are shown.
  */
 export function commitsToReview(clone: Pick<BranchClone, "commits" | "landedVia" | "state">): { commits: CommitLine[]; filtered: boolean; landed: LandedVia | null } {
-  const all = clone.commits.map(parseCommit);
+  const all = clone.commits.map(c => typeof c === "string" ? parseCommit(c) : { ...c, date: c.at });
   const lv = settled(clone.landedVia, INTEGRATED_STATES.has(clone.state));
   if (!lv) return { commits: all, filtered: false, landed: null };
   if (lv.extraCommits <= 0) return { commits: [], filtered: true, landed: lv };
