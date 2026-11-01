@@ -2,6 +2,7 @@ import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { BotIcon, FolderGit2Icon, FolderTreeIcon, GitBranchIcon, GitPullRequestIcon, HistoryIcon, InboxIcon, MenuIcon, SettingsIcon, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { AppearanceControls, PaletteMenu, ThemeMenu } from "@/components/theme-menu";
+import { Toaster } from "@/components/toaster";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useLiveUpdates } from "@/lib/queries";
 import { cn } from "@/lib/utils";
@@ -49,6 +50,7 @@ export function AppShell() {
         </main>
       </div>
       <BottomNav path={path} />
+      <Toaster />
     </div>
   );
 }

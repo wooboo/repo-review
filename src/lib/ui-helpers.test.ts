@@ -13,7 +13,7 @@ import { coalescer } from "./queries";
 describe("search params", () => {
   test("defaults for an empty URL", () => {
     expect(branchSearch.decode({})).toEqual(branchSearch.defaults);
-    expect(repoListSearch.decode(undefined)).toEqual({ q: "", host: "", sort: "attention" });
+    expect(repoListSearch.decode(undefined)).toEqual({ q: "", host: "", sort: "attention", view: "live", owner: "all", muted: false });
     expect(prSearch.decode({})).toEqual({ tab: "conversation", wrap: true });
   });
   test("strip removes defaults, keeps the rest", () => {
@@ -153,7 +153,7 @@ describe("search params of the v3 filters", () => {
     expect(branchSearch.activeCount(branchSearch.decode({ view: "gone" }), BRANCH_FILTER_KEYS)).toBe(0);
   });
   test("worktree status replaces the dirty switch", () => {
-    expect(worktreeSearch.decode({})).toEqual({ q: "", host: "", repo: "", status: "" });
+    expect(worktreeSearch.decode({})).toEqual({ q: "", host: "", repo: "", status: "", owner: "all", muted: false });
     expect(worktreeSearch.decode({ status: "missing" }).status).toBe("missing");
     expect(worktreeSearch.decode({ status: "dirty" }).status).toBe("");
     expect(worktreeSearch.strip(worktreeSearch.decode({ status: "changes" }))).toEqual({ status: "changes" });

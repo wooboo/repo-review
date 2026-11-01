@@ -107,3 +107,17 @@ export const stripRemote = (ref: string | null | undefined) => (ref ? ref.replac
 
 export const repoName = (key: string) => key.split("/").at(-1)?.replace(/@[0-9a-f]+$/, "") ?? key;
 export const repoOwner = (key: string) => key.split("/").slice(0, -1).join("/");
+
+const BYTE_UNITS = ["B", "kB", "MB", "GB", "TB"];
+/** Decimal byte size for people: "512 B", "1.2 MB", "34 GB"; "—" when unknown. */
+export function formatBytes(n: number | null | undefined): string {
+  if (n === null || n === undefined || !Number.isFinite(n) || n < 0) return "—";
+  let value = n;
+  let unit = 0;
+  while (value >= 1000 && unit < BYTE_UNITS.length - 1) {
+    value /= 1000;
+    unit++;
+  }
+  const digits = unit === 0 || value >= 10 ? 0 : 1;
+  return `${value.toFixed(digits)} ${BYTE_UNITS[unit]}`;
+}
