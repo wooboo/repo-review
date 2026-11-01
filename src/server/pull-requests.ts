@@ -1,3 +1,4 @@
+import { emitChange } from "./events";
 import { inferMergeMethod, rebuildProvenance } from "./provenance";
 import { Schema, Data } from "effect";
 import {
@@ -165,6 +166,7 @@ export async function getPullRequest(
   id: string,
   summaryOnly = false,
   rawPull?: unknown,
+  includeCommits = true,
 ): Promise<PullRequestDetail | null> {
   const { repo, number } = parsePrId(id),
     host = repo.split("/")[0],
@@ -260,16 +262,28 @@ export async function getPullRequest(
         if (!(e instanceof NotFound)) throw e;
       }
     }
-    const commits = (await pages(path + "/commits", true)).map(obj).map((c) => {
-      const commit = obj(c.commit),
-        a = obj(commit.author);
-      return {
-        sha: str(c.sha),
-        subject: str(commit.message).split("\n")[0],
-        author: str(a.name),
-        at: str(a.date),
-      };
-    });
+    const sourceRepo = str(obj(obj(raw.head).repo).full_name).toLowerCase();
+    const repoName = repo.slice(host.length + 1).toLowerCase();
+    includeCommits =
+      includeCommits && (sourceRepo === repoName || !!pr.branchId);
+    const cacheKey = `pr-commits:${id}:${pr.headSha}`;
+    const commits =
+      app.db.get<import("../domain/model").PullRequestCommit[]>(
+        "settings",
+        cacheKey,
+      ) ??
+      (!includeCommits || pr.state === "closed"
+        ? []
+        : (await pages(path + "/commits", true)).map(obj).map((c) => {
+            const commit = obj(c.commit),
+              a = obj(commit.author);
+            return {
+              sha: str(c.sha),
+              subject: str(commit.message).split("\n")[0],
+              author: str(a.name),
+              at: str(a.date),
+            };
+          }));
     const normalized = normalizeDetail(
       pr,
       raw,
@@ -294,63 +308,208 @@ export async function getPullRequest(
       summaryOnly ? Schema.decodeUnknownSync(PullRequest)(detail) : detail,
     );
     app.db.putCommits(id, commits);
+    if (includeCommits && pr.state !== "closed")
+      app.db.put("settings", cacheKey, commits);
     return detail;
   } catch (e) {
     if (e instanceof NotFound && !rawPull) return null;
     throw e;
   }
 }
-export async function refreshPullRequests(
+// All sync entry points share one queue, including scans on different hosts.
+const syncQueues = new WeakMap<ApplicationApi, Promise<unknown>>();
+export function refreshPullRequests(
   app: ApplicationApi,
   repo?: string,
   full = false,
-) {
-  const keys = repo
-    ? [repo]
-    : [
-        ...new Set(
-          app.db.list<{ key: string }>("repository").map((c) => c.key),
-        ),
-      ];
+): Promise<PullRequest[]> {
+  const next = (syncQueues.get(app) ?? Promise.resolve())
+    .catch(() => {})
+    .then(async () => {
+      const service = app.forge();
+      service.syncRequests = 0;
+      service.syncActive = true;
+      try {
+        return await sync(app, repo, full);
+      } finally {
+        service.syncActive = false;
+        for (const key of new Set(
+          app.db
+            .list<{ key: string }>("clone")
+            .map((c) => c.key)
+            .filter((key) => !repo || repo === key),
+        )) {
+          emitChange({ type: "pull-requests", id: key });
+          emitChange({ type: "inventory", id: key });
+        }
+      }
+    });
+  syncQueues.set(app, next);
+  return next;
+}
+async function sync(app: ApplicationApi, repo?: string, full = false) {
+  const clones = app.db.list<import("./application").StoredClone>("clone");
+  const keys = [...new Set(clones.map((c) => c.key))].filter(
+    (key) =>
+      (!repo || key === repo) &&
+      app.settings().forges.some((f) => key.startsWith(f.host + "/")),
+  );
+  const localBranches = new Set(
+    clones.flatMap((c) => c.branches.map((b) => `${c.key}#${b.name}`)),
+  );
   const result: PullRequest[] = [];
   for (const key of keys) {
-    if (!app.settings().forges.some((f) => key.startsWith(f.host + "/")))
-      continue;
+    const [host, owner, name] = key.split("/"),
+      service = app.forge();
+    const forge = app.settings().forges.find((f) => f.host === host)!;
+    await service.prepare(host);
     const watermark = full
       ? undefined
       : app.db.get<string>("settings", "pr-sync:" + key);
-
-    const rows = await app.forge().listPullRequests(key, watermark);
-    let next = 0;
-    const settled = await Promise.allSettled(
-      Array.from({ length: Math.min(4, rows.length) }, async () => {
-        while (next < rows.length) {
-          const raw = rows[next++],
-            n = Number(obj(raw).number),
-            id = `${key}!${n}`;
-          const cached = app.db.get<PullRequest>("pull_request", id);
-          // Closed history is immutable for inventory purposes; open PRs always
-          // refresh checks and reviews even when updated_at did not change.
-          if (
-            cached &&
-            cached.state !== "open" &&
-            cached.updatedAt === str(obj(raw).updated_at) &&
-            cached.commitCount !== undefined
-          ) {
-            result.push(cached);
-            continue;
+    const rows = await service.listPullRequests(key, watermark);
+    for (let offset = 0; offset < rows.length; offset += 10) {
+      const batch = rows.slice(offset, offset + 10).map((raw) => {
+        const p = obj(raw),
+          pr = normalizePullRequest(
+            key,
+            forge.kind,
+            p,
+            localBranches.has(`${key}#${str(obj(p.head).ref)}`),
+          );
+        const eligible =
+          (pr.state === "open" || pr.state === "merged") &&
+          (str(obj(obj(p.head).repo).full_name).toLowerCase() ===
+            `${owner}/${name}`.toLowerCase() ||
+            clones.some(
+              (c) =>
+                c.key === key && c.branches.some((b) => b.name === pr.head),
+            ));
+        const cacheKey = `pr-commits:${pr.id}:${pr.headSha}`;
+        let cached = app.db.get<import("../domain/model").PullRequestCommit[]>(
+          "settings",
+          cacheKey,
+        );
+        if (!cached) {
+          const previous = app.db.get<PullRequest>("pull_request", pr.id);
+          if (previous?.headSha === pr.headSha) {
+            const stored = app.db.commits(pr.id);
+            if (stored.length) {
+              cached = stored;
+              app.db.put("settings", cacheKey, stored);
+            }
           }
-          const p = await getPullRequest(app, id, true, raw);
-          if (p) result.push(Schema.decodeUnknownSync(PullRequest)(p));
         }
-      }),
-    );
-    const failures = settled.filter((r) => r.status === "rejected");
-    if (failures.length)
-      throw new AggregateError(
-        failures.map((r) => r.reason),
-        "Pull request sync incomplete",
-      );
+        return {
+          p,
+          pr,
+          eligible,
+          cacheKey,
+          commits: cached,
+          cursor: null as string | null,
+        };
+      });
+      if (forge.kind === "github") {
+        let pending = batch.filter((b) => b.eligible && !b.commits);
+        const collected = new Map<
+          number,
+          import("../domain/model").PullRequestCommit[]
+        >();
+        while (pending.length) {
+          const fields = pending
+            .map(
+              (b) =>
+                `p${b.pr.number}: pullRequest(number:${b.pr.number}) { commits(first:100, after:${JSON.stringify(b.cursor)}) { nodes { commit { oid messageHeadline author { name date } } } pageInfo { hasNextPage endCursor } } }`,
+            )
+            .join("\n");
+          const data = await service.graphql(
+            host,
+            `query { repository(owner:${JSON.stringify(owner)},name:${JSON.stringify(name)}) { ${fields} } }`,
+          );
+          const repository = obj(data.repository);
+          pending = pending.filter((b) => {
+            const connection = obj(obj(repository[`p${b.pr.number}`]).commits),
+              info = obj(connection.pageInfo);
+            if (!Array.isArray(connection.nodes))
+              throw new ForgeRejected({
+                message: "Incomplete GraphQL commit page",
+              });
+            const commits = collected.get(b.pr.number) ?? [];
+            commits.push(
+              ...connection.nodes.map(obj).map((n) => {
+                const c = obj(n.commit),
+                  a = obj(c.author);
+                return {
+                  sha: str(c.oid),
+                  subject: str(c.messageHeadline),
+                  author: str(a.name),
+                  at: str(a.date),
+                };
+              }),
+            );
+            collected.set(b.pr.number, commits);
+            if (info.hasNextPage) {
+              b.cursor = str(info.endCursor);
+              return true;
+            }
+            b.commits = commits;
+            app.db.put("settings", b.cacheKey, commits);
+            return false;
+          });
+        }
+      } else {
+        for (const b of batch) {
+          const detail = await getPullRequest(
+            app,
+            b.pr.id,
+            true,
+            b.p,
+            b.eligible,
+          );
+          if (detail) {
+            b.pr = detail;
+            b.commits = [...detail.commits];
+          }
+        }
+      }
+      for (const b of batch) {
+        const previous = app.db.get<PullRequest>("pull_request", b.pr.id);
+        const state = checkState(b.p.checkState);
+        const pr: PullRequest = {
+          ...b.pr,
+          mergeMethod:
+            b.pr.state === "merged"
+              ? previous?.mergeMethod && previous.mergeMethod !== "unknown"
+                ? previous.mergeMethod
+                : await inferMergeMethod(app, key, b.pr, false)
+              : null,
+          commitCount: b.commits?.length ?? 0,
+          checks:
+            forge.kind === "github"
+              ? {
+                  state,
+                  total: state === "none" ? 0 : 1,
+                  failed: Number(state === "failure"),
+                  pending: Number(state === "pending"),
+                }
+              : b.pr.checks,
+          review:
+            forge.kind === "forgejo"
+              ? b.pr.review
+              : b.p.reviewDecision === "APPROVED"
+                ? "approved"
+                : b.p.reviewDecision === "CHANGES_REQUESTED"
+                  ? "changes_requested"
+                  : b.p.reviewDecision === "REVIEW_REQUIRED"
+                    ? "review_required"
+                    : "none",
+        };
+        app.db.put("pull_request", pr.id, pr);
+        app.db.putCommits(pr.id, b.commits ?? []);
+        if (b.eligible && b.commits)
+          app.db.put("settings", b.cacheKey, b.commits);
+        result.push(pr);
+      }
+    }
     await rebuildProvenance(app, key);
     const newest = rows
       .map((r) => str(obj(r).updated_at))

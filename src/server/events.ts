@@ -1,11 +1,30 @@
 export type Change = {
-  type: "scan" | "job" | "agent-run" | "inventory";
+  type: "scan" | "job" | "agent-run" | "inventory" | "pull-requests";
   id: string;
 };
 const listeners = new Set<(event: Change) => void>();
-export function emitChange(event: Change) {
-  for (const listener of listeners) listener(event);
+export function createCoalescer(
+  deliver: (event: Change) => void,
+  delay = 1000,
+) {
+  const pending = new Map<string, Change>();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return (event: Change) => {
+    pending.set(event.type + ":" + event.id, event);
+    if (!timer) {
+      timer = setTimeout(() => {
+        timer = undefined;
+        const events = [...pending.values()];
+        pending.clear();
+        events.forEach(deliver);
+      }, delay);
+      timer.unref?.();
+    }
+  };
 }
+export const emitChange = createCoalescer((event) => {
+  for (const listener of listeners) listener(event);
+});
 export function eventsResponse(request: Request) {
   let cleanup = () => {};
   const stream = new ReadableStream<Uint8Array>({

@@ -75,7 +75,9 @@ export async function classify(app: ApplicationApi, id: string) {
   const state = {
     name: branch.name,
     subjects: branch.clones.flatMap((c) =>
-      c.commits.map((s) => s.replace(/^\S+ \S+ /, "")),
+      c.commits.map((s) =>
+        typeof s === "string" ? s.replace(/^\S+ \S+ /, "") : s.subject,
+      ),
     ),
     diffstat: branch.clones.map((c) => c.diffstat),
     age: branch.stale ? "stale" : "recent",

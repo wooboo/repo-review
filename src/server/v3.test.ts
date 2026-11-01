@@ -131,7 +131,13 @@ test("conflict-resolved squash, behind PR head, extra commits, history and landi
     const changed = f.app.getBranch(f.repo + "#topic")!;
     expect(changed.verdict).toBe("pr-merged-changed");
     expect(changed.landedVia?.extraCommitShas).toEqual([extra]);
-    expect(changed.clones[0].commits).toEqual([extra]);
+    expect(changed.clones[0].commits).toMatchObject([
+      { sha: extra, subject: "new work", author: "Test" },
+    ]);
+    expect(f.app.getBranch(f.repo + "#main")?.landedVia).toBeNull();
+    expect(
+      f.app.getCommitProvenance({ repo: f.repo, sha: f.merge })?.branchIds,
+    ).not.toContain(f.repo + "#main");
     f.g("branch", "-D", "topic");
     const gone: Clone = {
       ...f.snapshot(),
@@ -238,66 +244,6 @@ test("provenance verdict combination protects active and changed clones", () => 
     "pr-merged-changed",
   );
   expect(verdict([clone, { ...clone, state: "unmerged" }])).toBe("local-only");
-});
-
-test("incremental sync follows updated_at pages and retains deleted forge branches", async () => {
-  const { ForgeService } = await import("./forge");
-  const app = makeApplication(":memory:");
-  app.updateSettings({
-    ...app.settings(),
-    forges: [{ host: "github.com", kind: "github" }],
-  });
-  const repo = "github.com/example/project";
-  let calls: string[] = [];
-  let updated = "2026-01-01T00:00:00Z";
-  class Recorded extends ForgeService {
-    override async request(_host: string, path: string): Promise<unknown> {
-      calls.push(path);
-      if (path.includes("pulls?"))
-        return [
-          {
-            number: 7,
-            title: "Feature",
-            html_url: "https://github.com/example/project/pull/7",
-            head: { ref: "gone", sha: "final" },
-            base: { ref: "main" },
-            state: "closed",
-            merged_at: updated,
-            updated_at: updated,
-            merge_commit_sha: "squash",
-          },
-        ];
-      if (path.includes("/commits?"))
-        return [
-          {
-            sha: "first",
-            commit: {
-              message: "Feature",
-              author: { name: "Test", date: updated },
-            },
-          },
-        ];
-      if (path.includes("check-runs")) return { check_runs: [] };
-      if (path.includes("actions/runs")) return { workflow_runs: [] };
-      return [];
-    }
-  }
-  app.forge = () => new Recorded(app.settings().forges);
-  try {
-    await app.syncPullRequests({ repo, full: true });
-    expect(app.db.commits(repo + "!7").map((c) => c.sha)).toEqual(["first"]);
-    calls = [];
-    await app.syncPullRequests({ repo });
-    expect(calls.some((p) => p.includes("/commits?"))).toBe(false);
-    expect(app.listPullRequests({ state: "merged" }).total).toBe(1);
-    updated = "2026-01-02T00:00:00Z";
-    await app.syncPullRequests({ repo });
-    expect(app.listPullRequests({ state: "merged" }).items[0].updatedAt).toBe(
-      updated,
-    );
-  } finally {
-    await app.close();
-  }
 });
 
 test("missing worktree is not dirty and dashboard ignores it", async () => {

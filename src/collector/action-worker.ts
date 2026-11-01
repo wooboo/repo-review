@@ -11,6 +11,8 @@ export type WorkerAction = PlannedAction & {
   baseSha: string;
   remoteUrl: string;
   deletion?: Action;
+  plannedPrunes?: WorkerAction[];
+  dependsOn?: string[];
 };
 export function executeExtra(
   item: WorkerAction,

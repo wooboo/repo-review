@@ -148,3 +148,93 @@ test("archive pushed and verified before unmerged branch deletion", () => {
     ),
   ).toStartWith(a.sha);
 });
+
+test("missing worktree is deletable with a guarded prune dependency, never dirty", async () => {
+  const { executeExtra } = await import("./action-worker");
+  const { makeApplication } = await import("../server/application");
+  const p = fixture(),
+    missing = join(p, "gone");
+  git(p, "branch", "feature");
+  git(p, "worktree", "add", missing, "feature");
+  rmSync(missing, { recursive: true, force: true });
+  const app = makeApplication(":memory:");
+  try {
+    const snapshot = collectRepo(join(p, ".git"), p, false);
+    expect(snapshot.worktrees.find((w) => w.path === missing)).toMatchObject({
+      missing: true,
+      dirty: false,
+    });
+    app.db.replaceHost("local", [snapshot]);
+    expect(app.getBranch(snapshot.key + "#feature")?.verdict).toBe("delete");
+    const deletion = action(p);
+    const prune: import("./action-worker").WorkerAction = {
+      id: "prune",
+      kind: "prune-worktree",
+      target: { host: "local", repo: p, branch: "feature", worktree: missing },
+      branchId: snapshot.key + "#feature",
+      repoKey: snapshot.key,
+      status: "planned",
+      reason: "",
+      restore: null,
+      createdAt: new Date().toISOString(),
+      finishedAt: null,
+      sha: deletion.sha,
+      base: deletion.base,
+      baseSha: deletion.baseSha,
+      remoteUrl: "",
+    };
+    expect(execute(deletion, false, safe).status).toBe("skipped");
+    expect(executeExtra(prune, false, safe).status).toBe("planned");
+    expect(
+      execute(deletion, false, { ...safe, plannedPrunes: [prune] }).status,
+    ).toBe("planned");
+    // Apply must still refuse a missing registration even with a reviewed prune.
+    expect(
+      execute(deletion, true, { ...safe, plannedPrunes: [prune] }).status,
+    ).toBe("skipped");
+    // A staged index makes both the prune and dependent deletion unsafe.
+    git(p, "worktree", "prune", "--expire=now");
+    git(p, "worktree", "add", missing, "feature");
+    writeFileSync(join(missing, "staged"), "preserve me");
+    git(missing, "add", "staged");
+    rmSync(missing, { recursive: true, force: true });
+    expect(executeExtra(prune, false, safe).status).toBe("blocked");
+    expect(
+      execute(deletion, false, { ...safe, plannedPrunes: [prune] }).status,
+    ).toBe("skipped");
+  } finally {
+    await app.close();
+  }
+});
+
+test("multiple verdicts and Jev recommendation filter precede branch paging", async () => {
+  const { makeApplication } = await import("../server/application");
+  const p = fixture(),
+    app = makeApplication(":memory:");
+  const previous = process.env.TYPESAFE_API_KEY;
+  process.env.TYPESAFE_API_KEY = "fixture-only";
+  try {
+    git(p, "branch", "aaa");
+    git(p, "branch", "zzz");
+    const c = collectRepo(join(p, ".git"), p, false);
+    app.db.replaceHost("local", [c]);
+    app.db.put("classification", c.key + "#zzz", {
+      id: c.key + "#zzz",
+      value: { recommendation: "keep", confidence: 0.9, flags: [] },
+    });
+    const filtered = app.searchBranches({
+      verdicts: ["delete", "base"],
+      jev: "keep",
+      pageSize: 1,
+    });
+    expect(filtered.total).toBe(1);
+    expect(filtered.items[0].name).toBe("zzz");
+    expect(
+      app.searchBranches({ verdicts: ["delete", "base"], pageSize: 1 }).total,
+    ).toBe(3);
+  } finally {
+    if (previous === undefined) delete process.env.TYPESAFE_API_KEY;
+    else process.env.TYPESAFE_API_KEY = previous;
+    await app.close();
+  }
+});

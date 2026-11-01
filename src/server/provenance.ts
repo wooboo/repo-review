@@ -19,7 +19,7 @@ export async function cloneGit(
   const p = Bun.spawn(command, {
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_NO_LAZY_FETCH: "1" },
   });
   const timer = setTimeout(() => p.kill(), 120000);
   const [output, , code] = await Promise.all([
@@ -92,6 +92,7 @@ export async function inferMergeMethod(
   app: ApplicationApi,
   repo: string,
   pr: PullRequest,
+  allowForge = true,
 ): Promise<NonNullable<PullRequest["mergeMethod"]>> {
   if (!pr.mergeCommitSha || pr.state !== "merged") return "unknown";
   for (const clone of app.db
@@ -121,6 +122,7 @@ export async function inferMergeMethod(
       return ancestor === pr.headSha ? "merge" : "unknown";
     return ancestor === pr.headSha ? "rebase" : "squash";
   }
+  if (!allowForge) return "unknown";
   try {
     const [host, ...parts] = repo.split("/"),
       root = "/repos/" + parts.join("/");
@@ -174,6 +176,15 @@ export function parseProvenance(message: string) {
   };
 }
 export async function rebuildProvenance(app: ApplicationApi, repo: string) {
+  const baseNames = new Set(
+    app.db
+      .list<StoredClone>("clone")
+      .filter((c) => c.key === repo)
+      .flatMap((c) => [
+        ...c.bases.map((b) => b.replace(/^[^/]+\//, "")),
+        ...c.branches.filter((b) => b.state === "base").map((b) => b.name),
+      ]),
+  );
   const index = provenanceIndex(app, repo);
   const history = app.db
     .list<BranchHistoryItem>("branch_history")
@@ -195,7 +206,7 @@ export async function rebuildProvenance(app: ApplicationApi, repo: string) {
       return tips.get(sha)!;
     };
     for (const branch of [...clone.branches, ...clone.remoteBranches]) {
-      const landedVia = await link(branch.sha);
+      const landedVia = branch.state === "base" ? null : await link(branch.sha);
       app.db.put(
         "provenance",
         JSON.stringify([clone.host, clone.path, branch.name]),
@@ -215,7 +226,10 @@ export async function rebuildProvenance(app: ApplicationApi, repo: string) {
       app.db.put(
         "branch_history",
         JSON.stringify([h.host, h.clonePath, h.branch, h.sha]),
-        { ...h, landedVia: await link(h.sha) },
+        {
+          ...h,
+          landedVia: baseNames.has(h.branch) ? null : await link(h.sha),
+        },
       );
   }
   const allHistory = app.db
@@ -261,6 +275,7 @@ export async function rebuildProvenance(app: ApplicationApi, repo: string) {
         const branchIds = [
           ...new Set(
             allHistory
+              .filter((h) => !baseNames.has(h.branch))
               .filter((h) =>
                 pr
                   ? h.landedVia?.pullRequestId === pr.id
