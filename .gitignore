@@ -11,3 +11,7 @@ dist-ssr
 .vinxi
 __unconfig*
 todos.json
+*.db*
+data/
+src/collector/generated/
+.output/
