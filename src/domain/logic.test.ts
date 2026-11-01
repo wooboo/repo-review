@@ -38,6 +38,12 @@ test("verdict combines every clone", () => {
       headSha: "a",
     }),
   ).toBe("pr-merged-changed");
+  expect(
+    verdict([{ ...merged, state: "pr-merged-changed", sha: "b" }], {
+      state: "open",
+      headSha: "b",
+    }),
+  ).toBe("pr-open");
 });
 test("search defaults and round trip", () => {
   expect(searchParams({})).toMatchObject({

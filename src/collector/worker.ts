@@ -75,7 +75,10 @@ export function execute(
       item.base,
       [],
     );
-    if (!item.archive && !integrated(current.state))
+    const prIntegrated =
+      item.prEvidence?.state === "merged" &&
+      item.prEvidence.commits.includes(item.sha);
+    if (!item.archive && !integrated(current.state) && !prIntegrated)
       return result("blocked", "Branch no longer integrated");
     const rows = worktreeRows(item.repo);
     const mine = rows.filter((r) => r.branch === ref);

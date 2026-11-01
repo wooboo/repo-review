@@ -3,6 +3,8 @@ export const State = Schema.Literals([
   "base",
   "merged",
   "patch-merged",
+  "pr-merged",
+  "pr-merged-changed",
   "squash-merged",
   "content-in-base",
   "unmerged",
@@ -96,7 +98,61 @@ export const Divergence = Schema.Struct({
   ahead: Schema.Number,
   behind: Schema.Number,
 });
+export const MergeMethod = Schema.Literals([
+  "merge",
+  "squash",
+  "rebase",
+  "unknown",
+]);
+export const LandedVia = Schema.Struct({
+  pullRequestId: Schema.String,
+  number: Schema.Number,
+  url: Schema.String,
+  method: MergeMethod,
+  mergeCommitSha: Schema.NullOr(Schema.String),
+  matchedSha: Schema.String,
+  extraCommits: Schema.Number,
+  extraCommitShas: Schema.Array(Schema.String),
+});
+export type LandedVia = typeof LandedVia.Type;
+export const PullRequestCommit = Schema.Struct({
+  sha: Schema.String,
+  subject: Schema.String,
+  author: Schema.String,
+  at: Schema.String,
+});
+export type PullRequestCommit = typeof PullRequestCommit.Type;
+export const Landing = Schema.Struct({
+  ...PullRequestCommit.fields,
+  base: Schema.String,
+  pullRequestId: Schema.NullOr(Schema.String),
+  number: Schema.NullOr(Schema.Number),
+  sourceBranch: Schema.NullOr(Schema.String),
+  method: Schema.Literals(["merge", "squash", "rebase", "unknown", "direct"]),
+  via: Schema.Literals([
+    "merge-commit-sha",
+    "message",
+    "trailer",
+    "patch-id",
+    "none",
+  ]),
+  branchIds: Schema.Array(Schema.String),
+});
+export type Landing = typeof Landing.Type;
+export const BranchHistoryItem = Schema.Struct({
+  host: Schema.String,
+  repo: Schema.String,
+  clonePath: Schema.String,
+  branch: Schema.String,
+  sha: Schema.String,
+  firstSeen: Schema.String,
+  lastSeen: Schema.String,
+  goneAt: Schema.NullOr(Schema.String),
+  landedVia: Schema.NullOr(LandedVia),
+});
+export type BranchHistoryItem = typeof BranchHistoryItem.Type;
 export const Branch = Schema.Struct({
+  landedVia: Schema.optional(Schema.NullOr(LandedVia)),
   authorDate: Schema.optional(Schema.String),
   mergeBaseDate: Schema.optional(Schema.NullOr(Schema.String)),
   baseMovedAt: Schema.optional(Schema.NullOr(Schema.String)),
@@ -176,6 +232,13 @@ export const Action = Schema.Struct({
   baseSha: Schema.String,
   state: State,
   archive: Schema.Boolean,
+  prEvidence: Schema.optional(
+    Schema.Struct({
+      id: Schema.String,
+      state: Schema.String,
+      commits: Schema.Array(Schema.String),
+    }),
+  ),
   remote: Schema.String,
 });
 export type Action = typeof Action.Type;
@@ -261,6 +324,9 @@ export const PullRequest = Schema.Struct({
   createdAt: Schema.String,
   updatedAt: Schema.String,
   mergedAt: Schema.NullOr(Schema.String),
+  mergeCommitSha: Schema.NullOr(Schema.String),
+  mergeMethod: Schema.NullOr(MergeMethod),
+  commitCount: Schema.Number,
   checks: ChecksSummary,
   review: Schema.Literals([
     "approved",
@@ -273,6 +339,7 @@ export const PullRequest = Schema.Struct({
 export type PullRequest = typeof PullRequest.Type;
 export const PullRequestDetail = Schema.Struct({
   ...PullRequest.fields,
+  commits: Schema.Array(PullRequestCommit),
   body: Schema.String,
   files: Schema.Array(
     Schema.Struct({
@@ -458,3 +525,23 @@ export const JevClassification = Schema.Struct({
   flags: Schema.Array(Schema.String),
 });
 export type JevClassification = typeof JevClassification.Type;
+
+export const LandingListInput = Schema.Struct({
+  ...PageInput.fields,
+  repo: Schema.String,
+  base: Schema.optional(Schema.String),
+  since: Schema.optional(Schema.String),
+});
+export const CommitProvenanceInput = Schema.Struct({
+  repo: Schema.String,
+  sha: Schema.String,
+});
+export const BranchHistoryInput = Schema.Struct({
+  ...PageInput.fields,
+  repo: Schema.optional(Schema.String),
+  gone: Schema.optional(Schema.Boolean),
+});
+export const SyncPullRequestsInput = Schema.Struct({
+  repo: Schema.optional(Schema.String),
+  full: Schema.optional(Schema.Boolean),
+});

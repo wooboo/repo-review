@@ -9,7 +9,21 @@ import {
   ndJsonStream,
   PROTOCOL_VERSION,
 } from "@agentclientprotocol/sdk";
-import { git, expand } from "../collector/git";
+import { homedir } from "node:os";
+const expand = (p: string) =>
+  p.startsWith("~/") ? join(homedir(), p.slice(2)) : resolve(p);
+async function git(path: string, ...args: string[]) {
+  const p = Bun.spawn(["git", "-C", path, ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [out, , code] = await Promise.all([
+    new Response(p.stdout).text(),
+    new Response(p.stderr).text(),
+    p.exited,
+  ]);
+  return { out, code };
+}
 import type { ApplicationApi } from "./application";
 import {
   AgentRunInput,
@@ -126,8 +140,8 @@ export async function startRun(app: ApplicationApi, input: AgentRunInput) {
     cwd = host.kind === "local" ? await realpath(w.path) : w.path;
     if (
       host.kind === "local" &&
-      !git(clone.path, "worktree", "list", "--porcelain")
-        .out.split("\n")
+      !(await git(clone.path, "worktree", "list", "--porcelain")).out
+        .split("\n")
         .includes("worktree " + cwd)
     )
       throw new AgentError({ message: "Worktree no longer registered" });
@@ -136,20 +150,22 @@ export async function startRun(app: ApplicationApi, input: AgentRunInput) {
     await mkdir(root, { recursive: true });
     cwd = join(root, id);
     if (
-      git(
-        clone.path,
-        "worktree",
-        "add",
-        "-b",
-        "agent/" + id,
-        cwd,
-        branchName ?? "HEAD",
+      (
+        await git(
+          clone.path,
+          "worktree",
+          "add",
+          "-b",
+          "agent/" + id,
+          cwd,
+          branchName ?? "HEAD",
+        )
       ).code
     )
       throw new AgentError({ message: "Cannot create run worktree" });
   }
   if (host.kind === "ssh")
-    cwd = prepareRemote(host, {
+    cwd = await prepareRemote(host, {
       repo: clone.path,
       cwd,
       worktree: input.worktree,

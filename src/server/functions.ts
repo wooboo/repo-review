@@ -1,3 +1,9 @@
+import {
+  LandingListInput,
+  CommitProvenanceInput,
+  BranchHistoryInput,
+  SyncPullRequestsInput,
+} from "../domain/model";
 import { startJob, getJob } from "./jobs";
 import { createServerFn } from "@tanstack/react-start";
 import { Schema } from "effect";
@@ -141,3 +147,23 @@ export const classifyBranch = createServerFn({ method: "POST" })
 export const getBackgroundJob = createServerFn({ method: "GET" })
   .validator(valid(IdInput))
   .handler(({ data }) => withApp((a) => getJob(a, data.id)));
+
+export const listLandings = createServerFn({ method: "GET" })
+  .validator(valid(LandingListInput))
+  .handler(({ data }) => withApp((a) => a.listLandings(data)));
+
+export const getCommitProvenance = createServerFn({ method: "GET" })
+  .validator(valid(CommitProvenanceInput))
+  .handler(({ data }) => withApp((a) => a.getCommitProvenance(data)));
+
+export const listBranchHistory = createServerFn({ method: "GET" })
+  .validator(valid(BranchHistoryInput))
+  .handler(({ data }) => withApp((a) => a.listBranchHistory(data)));
+
+export const syncPullRequests = createServerFn({ method: "POST" })
+  .validator(valid(SyncPullRequestsInput))
+  .handler(({ data }) =>
+    withApp((a) =>
+      startJob(a, "sync-pull-requests", () => a.syncPullRequests(data)),
+    ),
+  );

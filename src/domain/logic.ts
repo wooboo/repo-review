@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import type { State, Verdict } from "./model";
+import type { State, Verdict, LandedVia } from "./model";
 export function safeUrl(value: string) {
   if (value.includes("://")) {
     const u = new URL(value);
@@ -33,9 +33,13 @@ export function normalizeUrl(value: string) {
   return "file:" + resolve(value);
 }
 export const integrated = (state: State) =>
-  ["merged", "patch-merged", "squash-merged", "content-in-base"].includes(
-    state,
-  );
+  [
+    "pr-merged",
+    "merged",
+    "patch-merged",
+    "squash-merged",
+    "content-in-base",
+  ].includes(state);
 export function verdict(
   clones: readonly {
     state: State;
@@ -54,7 +58,10 @@ export function verdict(
     )
   )
     return clones.some((c) => c.dirty || c.active) ? "check" : "delete";
+  // An open PR is the branch's current work; an earlier merged PR only adds context (landedVia).
   if (pr?.state === "open") return "pr-open";
+  if (clones.some((c) => c.state === "pr-merged-changed"))
+    return "pr-merged-changed";
   if (clones.some((c) => c.unpushed > 0)) return "local-only";
   if (pr?.state === "closed") return "pr-closed";
   if (pr?.state === "merged") return "pr-merged-changed";
@@ -62,3 +69,9 @@ export function verdict(
 }
 export const activeStatus = (s: string) =>
   ["running", "waiting", "starting", "queued", "preparing"].includes(s);
+
+export function landedState(state: State, via: LandedVia | null): State {
+  if (state === "base" || (via?.extraCommits && integrated(state)))
+    return state;
+  return via ? (via.extraCommits ? "pr-merged-changed" : "pr-merged") : state;
+}

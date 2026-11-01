@@ -1,3 +1,4 @@
+import { inferMergeMethod, rebuildProvenance } from "./provenance";
 import { Schema, Data } from "effect";
 import {
   PullRequest,
@@ -66,6 +67,9 @@ export function normalizePullRequest(
     createdAt: str(p.created_at),
     updatedAt: str(p.updated_at),
     mergedAt: p.merged_at ?? null,
+    mergeCommitSha: p.merge_commit_sha ?? null,
+    mergeMethod: null,
+    commitCount: 0,
     checks: { state: "none", total: 0, failed: 0, pending: 0 },
     review: "none",
     mergeable: typeof p.mergeable === "boolean" ? p.mergeable : null,
@@ -102,6 +106,7 @@ export function normalizeDetail(
   const bytes = Buffer.from(diff);
   return {
     ...pr,
+    commits: [],
     checks: {
       state: failed
         ? "failure"
@@ -176,13 +181,18 @@ export async function getPullRequest(
       raw,
       !!app.getBranch(`${repo}#${str(obj(raw.head).ref)}`),
     );
-    const pages = async (p: string) => {
+    const pages = async (p: string, required = false) => {
       const rows: unknown[] = [];
-      for (let page = 1; page <= 100; page++) {
-        const r = await service.request(
-          host,
-          `${p}${p.includes("?") ? "&" : "?"}per_page=100&limit=100&page=${page}`,
-        );
+      for (let page = 1; ; page++) {
+        const r = await service
+          .request(
+            host,
+            `${p}${p.includes("?") ? "&" : "?"}per_page=100&limit=100&page=${page}`,
+          )
+          .catch((e) => {
+            if (!required && e instanceof NotFound) return [];
+            throw e;
+          });
         const a = Array.isArray(r) ? r : [];
         rows.push(...a);
         if (a.length < 100) break;
@@ -210,7 +220,7 @@ export async function getPullRequest(
       comments.push(...(await pages(path + "/comments")));
     let checks: unknown[] = statuses;
     if (forge.kind === "github") {
-      for (let page = 1; page <= 100; page++) {
+      for (let page = 1; ; page++) {
         const c = obj(
           await service.request(
             host,
@@ -250,7 +260,17 @@ export async function getPullRequest(
         if (!(e instanceof NotFound)) throw e;
       }
     }
-    const detail = normalizeDetail(
+    const commits = (await pages(path + "/commits", true)).map(obj).map((c) => {
+      const commit = obj(c.commit),
+        a = obj(commit.author);
+      return {
+        sha: str(c.sha),
+        subject: str(commit.message).split("\n")[0],
+        author: str(a.name),
+        at: str(a.date),
+      };
+    });
+    const normalized = normalizeDetail(
       pr,
       raw,
       str(diff),
@@ -259,28 +279,50 @@ export async function getPullRequest(
       comments,
       checks,
     );
+    const detail = {
+      ...normalized,
+      commits,
+      commitCount: commits.length,
+      mergeMethod:
+        normalized.state === "merged"
+          ? await inferMergeMethod(app, repo, normalized)
+          : null,
+    };
     app.db.put(
       "pull_request",
       id,
       summaryOnly ? Schema.decodeUnknownSync(PullRequest)(detail) : detail,
     );
+    app.db.putCommits(id, commits);
     return detail;
   } catch (e) {
-    if (e instanceof NotFound) return null;
+    if (e instanceof NotFound && !rawPull) return null;
     throw e;
   }
 }
-export async function refreshPullRequests(app: ApplicationApi, repo?: string) {
+export async function refreshPullRequests(
+  app: ApplicationApi,
+  repo?: string,
+  full = false,
+) {
   const keys = repo
     ? [repo]
-    : [...new Set(app.db.list<{ key: string }>("clone").map((c) => c.key))];
+    : [
+        ...new Set(
+          app.db.list<{ key: string }>("repository").map((c) => c.key),
+        ),
+      ];
   const result: PullRequest[] = [];
   for (const key of keys) {
     if (!app.settings().forges.some((f) => key.startsWith(f.host + "/")))
       continue;
-    const rows = await app.forge().listPullRequests(key);
+    const watermark = full
+      ? undefined
+      : app.db.get<string>("settings", "pr-sync:" + key);
+
+    const rows = await app.forge().listPullRequests(key, watermark);
     let next = 0;
-    await Promise.all(
+    const settled = await Promise.allSettled(
       Array.from({ length: Math.min(4, rows.length) }, async () => {
         while (next < rows.length) {
           const raw = rows[next++],
@@ -292,7 +334,8 @@ export async function refreshPullRequests(app: ApplicationApi, repo?: string) {
           if (
             cached &&
             cached.state !== "open" &&
-            cached.updatedAt === str(obj(raw).updated_at)
+            cached.updatedAt === str(obj(raw).updated_at) &&
+            cached.commitCount !== undefined
           ) {
             result.push(cached);
             continue;
@@ -302,6 +345,18 @@ export async function refreshPullRequests(app: ApplicationApi, repo?: string) {
         }
       }),
     );
+    const failures = settled.filter((r) => r.status === "rejected");
+    if (failures.length)
+      throw new AggregateError(
+        failures.map((r) => r.reason),
+        "Pull request sync incomplete",
+      );
+    await rebuildProvenance(app, key);
+    const newest = rows
+      .map((r) => str(obj(r).updated_at))
+      .sort()
+      .at(-1);
+    if (newest) app.db.put("settings", "pr-sync:" + key, newest);
   }
   return result;
 }
@@ -381,6 +436,9 @@ export async function mutatePullRequest(
   const result = await app.forge().operation(repo, operation, {
     number,
     ...input,
+    ...(operation === "merge" && input.method !== "rebase"
+      ? mergeTrailers(kind, before)
+      : {}),
     ...(operation === "merge"
       ? kind === "github"
         ? { merge_method: input.method, sha: before.headSha }
@@ -410,4 +468,15 @@ export async function mutatePullRequest(
       );
   }
   return after!;
+}
+
+export function mergeTrailers(
+  kind: "github" | "forgejo",
+  pr: PullRequest & { body?: string },
+) {
+  const message = `Source-Branch: ${pr.head}\nSource-Head: ${pr.headSha}\nSource-PR: ${pr.url}`;
+  const body = pr.body ? `${pr.body}\n\n${message}` : message;
+  return kind === "github"
+    ? { commit_message: body }
+    : { MergeMessageField: `${pr.title}\n\n${body}` };
 }
