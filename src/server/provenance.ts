@@ -19,7 +19,7 @@ export async function cloneGit(
   const p = Bun.spawn(command, {
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_NO_LAZY_FETCH: "1" },
   });
   const timer = setTimeout(() => p.kill(), 120000);
   const [output, , code] = await Promise.all([
@@ -176,6 +176,15 @@ export function parseProvenance(message: string) {
   };
 }
 export async function rebuildProvenance(app: ApplicationApi, repo: string) {
+  const baseNames = new Set(
+    app.db
+      .list<StoredClone>("clone")
+      .filter((c) => c.key === repo)
+      .flatMap((c) => [
+        ...c.bases.map((b) => b.replace(/^[^/]+\//, "")),
+        ...c.branches.filter((b) => b.state === "base").map((b) => b.name),
+      ]),
+  );
   const index = provenanceIndex(app, repo);
   const history = app.db
     .list<BranchHistoryItem>("branch_history")
@@ -219,11 +228,7 @@ export async function rebuildProvenance(app: ApplicationApi, repo: string) {
         JSON.stringify([h.host, h.clonePath, h.branch, h.sha]),
         {
           ...h,
-          landedVia: clone.bases.some(
-            (b) => b === h.branch || b.replace(/^[^/]+\//, "") === h.branch,
-          )
-            ? null
-            : await link(h.sha),
+          landedVia: baseNames.has(h.branch) ? null : await link(h.sha),
         },
       );
   }
@@ -270,13 +275,7 @@ export async function rebuildProvenance(app: ApplicationApi, repo: string) {
         const branchIds = [
           ...new Set(
             allHistory
-              .filter(
-                (h) =>
-                  !clone.bases.some(
-                    (b) =>
-                      b === h.branch || b.replace(/^[^/]+\//, "") === h.branch,
-                  ),
-              )
+              .filter((h) => !baseNames.has(h.branch))
               .filter((h) =>
                 pr
                   ? h.landedVia?.pullRequestId === pr.id

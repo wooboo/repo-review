@@ -384,7 +384,7 @@ export type GithubPull = {
   mergeCommit: { oid: string } | null;
   author: { login: string } | null;
   mergeable: string;
-  reviewDecision?: string;
+  reviewDecision?: string | null;
   commits?: {
     nodes: { commit: { statusCheckRollup: { state: string } | null } }[];
   };

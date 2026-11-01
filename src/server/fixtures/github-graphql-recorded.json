@@ -1,0 +1,33 @@
+{
+  "number": 5,
+  "title": "Build the Contract v3 UI: landings, provenance, branch history and safe Markdown",
+  "url": "https://github.com/wooboo/repo-review/pull/5",
+  "state": "MERGED",
+  "isDraft": false,
+  "headRefName": "ui-v3",
+  "headRefOid": "2dd7e9c9bddf352d56bdc0e492d8007eb7b31d1e",
+  "headRepository": {
+    "nameWithOwner": "wooboo/repo-review"
+  },
+  "baseRefName": "main",
+  "createdAt": "2026-11-01T17:54:16Z",
+  "updatedAt": "2026-11-01T17:55:01Z",
+  "mergedAt": "2026-11-01T17:55:01Z",
+  "mergeCommit": {
+    "oid": "3edb6a46fbc3fc2802e32b7fa3c5c7db70e9d17a"
+  },
+  "author": {
+    "login": "wooboo"
+  },
+  "mergeable": "UNKNOWN",
+  "reviewDecision": null,
+  "commits": {
+    "nodes": [
+      {
+        "commit": {
+          "statusCheckRollup": null
+        }
+      }
+    ]
+  }
+}

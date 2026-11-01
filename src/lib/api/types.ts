@@ -18,6 +18,7 @@ import type {
   ChecksSummary,
   Clone as DomainClone,
   Forge,
+  ForgeBudget,
   Host,
   JevClassification,
   LandedVia,
@@ -46,6 +47,7 @@ export type {
   BranchHistoryItem,
   ChecksSummary,
   Forge,
+  ForgeBudget,
   Host,
   LandedVia,
   Landing,
@@ -140,6 +142,8 @@ export type Scan = {
 };
 
 export type Dashboard = {
+  forgeBudgets: ForgeBudget[];
+  missingWorktrees: number;
   repositories: number;
   clones: number;
   branches: number;

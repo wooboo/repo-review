@@ -205,6 +205,10 @@ test("watermark stops pages; head SHA cache avoids repeat commits and excludes u
     updated = "2026-01-03T00:00:00Z";
     await app.syncPullRequests();
     expect(commits).toBe(2);
+    head = "head-one";
+    updated = "2026-01-04T00:00:00Z";
+    await app.syncPullRequests();
+    expect(commits).toBe(2);
     expect(app.db.get("settings", "pr-sync:" + clone.key)).toBe(updated);
     expect(app.dashboard().forgeBudgets).toHaveLength(2);
     app.db.put("settings", "pr-sync:" + clone.key, "unchanged");
@@ -368,4 +372,70 @@ test("PR checks and history text filtering happen before pagination", async () =
   } finally {
     await app.close();
   }
+});
+
+test("Retry-After cannot shorten a primary reset deadline", () => {
+  const guard = new BudgetGuard(),
+    reset = Math.floor(Date.now() / 1000) + 3600;
+  expect(() =>
+    guard.observe(
+      "github.com",
+      "core",
+      new Response(null, {
+        status: 429,
+        headers: {
+          "retry-after": "60",
+          "x-ratelimit-remaining": "0",
+          "x-ratelimit-reset": String(reset),
+        },
+      }),
+      1000,
+    ),
+  ).toThrow(ForgeRateLimited);
+  expect(guard.budgets.get("github.com:core")?.pausedUntil).toBe(
+    new Date(reset * 1000).toISOString(),
+  );
+});
+
+test("forge requests serialize across independent callers", async () => {
+  const old = globalThis.fetch;
+  let active = 0,
+    max = 0;
+  globalThis.fetch = (async () => {
+    active++;
+    max = Math.max(active, max);
+    await pause();
+    active--;
+    return Response.json({});
+  }) as unknown as typeof fetch;
+  try {
+    const f = new ForgeService([{ host: "forge.example", kind: "forgejo" }]);
+    await Promise.all([
+      f.request("forge.example", "/one"),
+      f.request("forge.example", "/two"),
+    ]);
+    expect(max).toBe(1);
+  } finally {
+    globalThis.fetch = old;
+  }
+});
+
+test("recorded public GraphQL response preserves deleted-head provenance and null checks", async () => {
+  const { default: recorded } =
+    await import("./fixtures/github-graphql-recorded.json");
+  const { normalizePullRequest } = await import("./pull-requests");
+  const mapped = mapGithubPull(recorded as GithubPull);
+  const pr = normalizePullRequest(
+    "github.com/wooboo/repo-review",
+    "github",
+    mapped,
+  );
+  expect(pr).toMatchObject({
+    number: 5,
+    state: "merged",
+    head: "ui-v3",
+    headSha: "2dd7e9c9bddf352d56bdc0e492d8007eb7b31d1e",
+    mergeCommitSha: "3edb6a46fbc3fc2802e32b7fa3c5c7db70e9d17a",
+  });
+  expect(mapped.checkState).toBe("none");
 });

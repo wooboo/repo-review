@@ -59,7 +59,7 @@ export class BudgetGuard {
       h.get("x-ratelimit-remaining") ?? h.get("ratelimit-remaining");
     const reset = h.get("x-ratelimit-reset") ?? h.get("ratelimit-reset");
     const retry = h.get("retry-after");
-    const until = retry
+    let until = retry
       ? new Date(
           /^\d+$/.test(retry)
             ? Date.now() + Number(retry) * 1000
@@ -71,6 +71,11 @@ export class BudgetGuard {
           ? new Date(Number(reset) * 1000).toISOString()
           : new Date(Date.now() + 60000).toISOString()
         : undefined;
+    if (remaining === "0" && reset && until) {
+      until = new Date(
+        Math.max(Date.parse(until), Number(reset) * 1000),
+      ).toISOString();
+    }
     if (remaining !== null || until)
       this.update(
         host,

@@ -358,7 +358,7 @@ Sync job results are `{ pullRequests, forgeBudgets }`. Rate-limited jobs have
 `retryAt` and `result: { forgeBudgets }`. The scheduler resumes the same job after
 `retryAt`, including after restart, with its original repo/full input. The sync
 watermark advances only after the repository completes; previously completed
-commit pages remain cached on retry. Scan-triggered pauses create the same durable
+commit lists remain cached on retry. Scan-triggered pauses create the same durable
 retry jobs. A 280-request safety pause retries after one hour.
 
 `/api/events` invalidations are coalesced by type and id, at most once per second.
