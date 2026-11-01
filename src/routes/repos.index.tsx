@@ -1,16 +1,23 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { BellIcon, BellOffIcon, EllipsisVerticalIcon } from "lucide-react";
 import { useCallback, useMemo } from "react";
+import { DeletedRepositories } from "@/components/deleted-repos";
 import { VerdictBar } from "@/components/domain";
 import { FilterField } from "@/components/filters/field";
 import { FilterLayout, OptionSelect, SearchInput } from "@/components/filters/controls";
+import { VisibilityFilters } from "@/components/filters/visibility";
+import { IconButton } from "@/components/icon-button";
 import { PageHeader } from "@/components/page-header";
+import { ExternalMarker, MutedBadge } from "@/components/rows";
 import { EmptyState, ErrorState, ListSkeleton } from "@/components/states";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { RepositorySummary, Verdict } from "@/lib/api/types";
 import { repoName, repoOwner } from "@/lib/format";
-import { q } from "@/lib/queries";
+import { q, useSetMuted } from "@/lib/queries";
 import { title } from "@/lib/route-helpers";
-import { repoListSearch, stripDefaults, validator, type RepoListSearch } from "@/lib/search";
+import { REPO_FILTER_KEYS, repoListSearch, stripDefaults, validator, visibilityInput, type RepoListSearch } from "@/lib/search";
 import { needsDecision, verdictsByRepo } from "@/lib/verdicts";
 import { m } from "@/messages";
 
@@ -30,29 +37,51 @@ function Repos() {
     (patch: Partial<RepoListSearch>, replace = false) => void navigate({ search: (prev) => ({ ...prev, ...patch }), replace }),
     [navigate],
   );
-  const repos = useQuery(q.repos({ host: search.host || undefined, text: search.q || undefined, pageSize: 200 }));
-  const branches = useQuery(q.allBranches());
+  const deleted = search.view === "deleted";
+  const visibility = visibilityInput(search);
+  const repos = useQuery({ ...q.repos({ ...visibility, host: search.host || undefined, text: search.q || undefined, pageSize: 200 }), enabled: !deleted });
+  const branches = useQuery({ ...q.allBranches(search.muted ? { includeMuted: true } : {}), enabled: !deleted });
   const settings = useQuery(q.settings());
   const counts = useMemo(() => verdictsByRepo(branches.data ?? []), [branches.data]);
   const rows = useMemo(() => sortRepos(repos.data?.items ?? [], search.sort, counts), [repos.data, search.sort, counts]);
-  const activeCount = repoListSearch.activeCount(search, ["host"]);
+  const activeCount = repoListSearch.activeCount(search, REPO_FILTER_KEYS);
+  const tabs = (
+    <Tabs value={search.view} onValueChange={(v) => update({ view: v === "deleted" ? "deleted" : "live" })} className="mb-3">
+      <TabsList className="h-11 w-full md:h-9 md:w-auto">
+        <TabsTrigger value="live" className="px-4">{m.repos.view.live}</TabsTrigger>
+        <TabsTrigger value="deleted" className="px-4">{m.repos.view.deleted}</TabsTrigger>
+      </TabsList>
+    </Tabs>
+  );
+  if (deleted)
+    return (
+      <>
+        <PageHeader title={m.repos.title} />
+        {tabs}
+        <DeletedRepositories />
+      </>
+    );
 
   return (
     <>
       <PageHeader title={m.repos.title} subtitle={repos.data ? m.results(repos.data.total) : undefined} />
+      {tabs}
       <FilterLayout
         activeCount={activeCount}
-        onReset={() => update({ host: "" })}
+        onReset={() => update({ host: "", owner: "all", muted: false })}
         toolbar={<>
           <SearchInput value={search.q} onChange={(v) => update({ q: v }, true)} placeholder={m.repos.searchPlaceholder} />
           <OptionSelect className="w-auto" label={m.repos.sortLabel} value={search.sort} onChange={(v) => update({ sort: v || "attention" })}
             options={SORTS.map((s) => ({ value: s, label: m.repos.sort[s] }))} />
         </>}
         panel={(p) => (
-          <FilterField label={m.repos.host} labelFor={p + "host"}>
-            <OptionSelect id={p + "host"} value={search.host} onChange={(host) => update({ host })} anyLabel={m.repos.allHosts}
-              options={(settings.data?.hosts ?? []).map((h) => ({ value: h.id, label: h.id }))} />
-          </FilterField>
+          <>
+            <FilterField label={m.repos.host} labelFor={p + "host"}>
+              <OptionSelect id={p + "host"} value={search.host} onChange={(host) => update({ host })} anyLabel={m.repos.allHosts}
+                options={(settings.data?.hosts ?? []).map((h) => ({ value: h.id, label: h.id }))} />
+            </FilterField>
+            <VisibilityFilters owner={search.owner} muted={search.muted} onChange={update} />
+          </>
         )}
       >
         {repos.isPending ? (
@@ -60,7 +89,7 @@ function Repos() {
         ) : repos.error ? (
           <ErrorState error={repos.error} onRetry={() => void repos.refetch()} />
         ) : !rows.length ? (
-          <EmptyState>{search.q || search.host ? m.repos.noMatch : m.repos.empty}</EmptyState>
+          <EmptyState>{search.q || activeCount ? m.repos.noMatch : m.repos.empty}</EmptyState>
         ) : (
           <ul className="flex flex-col divide-y rounded-xl border bg-card">
             {rows.map((r) => (
@@ -86,15 +115,19 @@ function RepoRow({ repo, counts }: { repo: RepositorySummary; counts: Partial<Re
   const summary = repo.about?.summary;
   const decide = counts ? needsDecision(counts) : 0;
   return (
-    <li>
-      <Link to="/repos/$repo" params={{ repo: repo.key }} className="flex flex-col gap-2 p-3 hover:bg-muted/50">
+    <li className="relative">
+      <Link to="/repos/$repo" params={{ repo: repo.key }} className="flex flex-col gap-2 p-3 pr-14 hover:bg-muted/50 md:pr-12">
         <span className="flex items-baseline justify-between gap-3">
           <span className="min-w-0 font-medium break-all">{repoName(repo.key)}</span>
           <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
             {m.repos.branches(repo.branches)} · {m.repos.clones(repo.clones)}
           </span>
         </span>
-        <span className="-mt-1.5 truncate text-xs text-muted-foreground">{repoOwner(repo.key)}</span>
+        <span className="-mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="min-w-0 truncate">{repoOwner(repo.key)}</span>
+          {!repo.mine && repo.owner && <ExternalMarker owner={repo.owner} />}
+          {repo.muted && <MutedBadge className="h-5" />}
+        </span>
         <VerdictBar counts={counts ?? {}} />
         {(summary || decide > 0 || counts?.["local-only"]) && (
           <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
@@ -105,6 +138,28 @@ function RepoRow({ repo, counts }: { repo: RepositorySummary; counts: Partial<Re
           </span>
         )}
       </Link>
+      <RepoMenu repo={repo} />
     </li>
+  );
+}
+
+function RepoMenu({ repo }: { repo: RepositorySummary }) {
+  const mute = useSetMuted();
+  const name = repoName(repo.key);
+  const set = (muted: boolean) => mute.mutate({ repositoryId: repo.key, muted });
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <IconButton label={m.repos.menu(name)} className="absolute top-1.5 right-1.5 md:top-2 md:right-2">
+          <EllipsisVerticalIcon />
+        </IconButton>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem className="min-h-11 md:min-h-8" onSelect={() => set(!repo.muted)}>
+          {repo.muted ? <BellIcon /> : <BellOffIcon />}
+          {repo.muted ? m.mute.unmuteRepo : m.mute.muteRepo}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

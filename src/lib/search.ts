@@ -54,10 +54,26 @@ const Page = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1));
 const Text = Schema.String;
 const JevFilter = Schema.Literals(["", "delete", "archive", "keep", "finish_and_merge"]);
 
+/** Contract v4.1 visibility filters shared by every inventory list: whose items, and muted repositories. */
+export const OWNERS = ["all", "mine", "others"] as const;
+export type OwnerFilter = (typeof OWNERS)[number];
+const visibilityFields = { owner: Schema.Literals(OWNERS), muted: Schema.Boolean };
+const visibilityDefaults = { owner: "all", muted: false } as const;
+export const VISIBILITY_KEYS = ["owner", "muted"] as const;
+
+/** Server input for the visibility filters (`mine` omitted means no ownership filter). */
+export function visibilityInput(s: { owner: OwnerFilter; muted: boolean }): { mine?: boolean; includeMuted?: boolean } {
+  return {
+    ...(s.owner === "all" ? {} : { mine: s.owner === "mine" }),
+    ...(s.muted ? { includeMuted: true } : {}),
+  };
+}
+
 export const repoListSearch = searchSchema(
-  { q: Text, host: Text, sort: Schema.Literals(["attention", "name", "branches"]) },
-  { q: "", host: "", sort: "attention" },
+  { q: Text, host: Text, sort: Schema.Literals(["attention", "name", "branches"]), view: Schema.Literals(["live", "deleted"]), ...visibilityFields },
+  { q: "", host: "", sort: "attention", view: "live", ...visibilityDefaults },
 );
+export const REPO_FILTER_KEYS = ["host", ...VISIBILITY_KEYS] as const;
 
 export const repoSearch = searchSchema(
   { tab: Schema.Literals(["overview", "branches", "worktrees", "prs", "landings"]), base: Text, page: Page },
@@ -78,16 +94,18 @@ export const branchSearch = searchSchema(
     sort: Schema.Literals(["date", "name"]),
     view: Schema.Literals(["live", "gone"]),
     page: Page,
+    ...visibilityFields,
   },
-  { q: "", verdict: [], host: "", repo: "", state: "", stale: false, dirty: false, localOnly: false, jev: "", sort: "date", view: "live", page: 1 },
+  { q: "", verdict: [], host: "", repo: "", state: "", stale: false, dirty: false, localOnly: false, jev: "", sort: "date", view: "live", page: 1, ...visibilityDefaults },
 );
-export const BRANCH_FILTER_KEYS = ["verdict", "host", "repo", "state", "stale", "dirty", "localOnly", "jev"] as const;
+export const BRANCH_FILTER_KEYS = ["verdict", "host", "repo", "state", "stale", "dirty", "localOnly", "jev", ...VISIBILITY_KEYS] as const;
+export const GONE_FILTER_KEYS = ["repo", ...VISIBILITY_KEYS] as const;
 
 export const worktreeSearch = searchSchema(
-  { q: Text, host: Text, repo: Text, status: Schema.Literals(["", "changes", "missing", "clean"]) },
-  { q: "", host: "", repo: "", status: "" },
+  { q: Text, host: Text, repo: Text, status: Schema.Literals(["", "changes", "missing", "clean"]), ...visibilityFields },
+  { q: "", host: "", repo: "", status: "", ...visibilityDefaults },
 );
-export const WORKTREE_FILTER_KEYS = ["host", "repo", "status"] as const;
+export const WORKTREE_FILTER_KEYS = ["host", "repo", "status", ...VISIBILITY_KEYS] as const;
 
 export const prListSearch = searchSchema(
   {
@@ -96,10 +114,11 @@ export const prListSearch = searchSchema(
     repo: Text,
     checks: Schema.Literals(["", "success", "failure", "pending", "none"]),
     page: Page,
+    ...visibilityFields,
   },
-  { q: "", state: "open", repo: "", checks: "", page: 1 },
+  { q: "", state: "open", repo: "", checks: "", page: 1, ...visibilityDefaults },
 );
-export const PR_FILTER_KEYS = ["state", "repo", "checks"] as const;
+export const PR_FILTER_KEYS = ["state", "repo", "checks", ...VISIBILITY_KEYS] as const;
 
 export const prSearch = searchSchema(
   { tab: Schema.Literals(["conversation", "commits", "files", "diff", "checks"]), wrap: Schema.Boolean },

@@ -26,9 +26,12 @@ import type {
   RepositoryDetail,
   RepositorySummary,
   Scan,
-  Settings,
+  SettingsUpdate,
+  SettingsView,
   Verdict,
   WorktreeItem,
+  DeletedRepository,
+  RepositoryDeletionPlan,
 } from "./types";
 
 export { allPages, errorMessage, MAX_PAGE, paginate } from "./pages";
@@ -74,11 +77,13 @@ export async function listScans(): Promise<Scan[]> {
   return ((await server.listScans()) as Scan[]).sort((a, b) => b.started.localeCompare(a.started));
 }
 
-export async function getSettings(): Promise<Settings> {
+/** Redacted settings: the Jev key is never returned, only whether one resolves and from where. */
+export async function getSettings(): Promise<SettingsView> {
   return server.getSettings();
 }
 
-export async function updateSettings(settings: Settings): Promise<Settings> {
+/** Omitting `jev` (or a field of it) keeps the stored value; `null` clears it. */
+export async function updateSettings(settings: SettingsUpdate): Promise<SettingsView> {
   return server.updateSettings({ data: settings });
 }
 
@@ -94,8 +99,9 @@ export async function planActions(input: PlanInput): Promise<JobRef> {
   return server.planActions({ data: input });
 }
 
-export async function applyActions(ids: string[]): Promise<JobRef> {
-  return server.applyActions({ data: { ids } });
+/** `confirm` must equal the repository name when any id is a delete-clone action. */
+export async function applyActions(ids: string[], confirm?: string): Promise<JobRef> {
+  return server.applyActions({ data: confirm === undefined ? { ids } : { ids, confirm } });
 }
 
 export async function listActions(input: { status?: PlannedAction["status"]; repo?: string; page: number; pageSize: number }): Promise<Page<PlannedAction>> {
@@ -170,4 +176,24 @@ export async function getCommitProvenance(input: { repo: string; sha: string }):
 
 export async function listBranchHistory(input: BranchHistoryQuery): Promise<Page<BranchHistoryItem>> {
   return server.listBranchHistory({ data: input });
+}
+
+// ---------- Contract v4: repository deletion
+
+/** Read-only check on every chosen clone's host; the job result is a `RepositoryDeletionPlan`. */
+export async function planRepositoryDeletion(input: { repositoryId: string; cloneIds?: string[] }): Promise<JobRef> {
+  return server.planRepositoryDeletion({ data: input });
+}
+
+export async function listDeletedRepositories(): Promise<DeletedRepository[]> {
+  return [...(await server.listDeletedRepositories())] as DeletedRepository[];
+}
+
+export const asDeletionPlan = (v: unknown): RepositoryDeletionPlan | null =>
+  v && typeof v === "object" && "summary" in v && "actions" in v ? (v as RepositoryDeletionPlan) : null;
+
+// ---------- Contract v4.1: mute
+
+export async function setRepositoryMuted(input: { repositoryId: string; muted: boolean }): Promise<{ repositoryId: string; muted: boolean }> {
+  return server.setRepositoryMuted({ data: input });
 }

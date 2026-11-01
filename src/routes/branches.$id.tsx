@@ -152,7 +152,7 @@ function BranchPage() {
 
 /** A branch the inventory no longer has: its history entries (where it was, where it landed), if any. */
 function GoneBranch({ repo, name }: { repo: string; name: string }) {
-  const history = useQuery(q.history({ repo, gone: true, page: 1, pageSize: 200 }));
+  const history = useQuery(q.history({ repo, includeMuted: true, gone: true, page: 1, pageSize: 200 }));
   const rows = (history.data?.items ?? []).filter((h) => h.branch === name);
   if (history.isPending) return <ListSkeleton rows={2} />;
   if (!rows.length) return <EmptyState>{m.branches.notFound}</EmptyState>;

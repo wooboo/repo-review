@@ -3,6 +3,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useCallback } from "react";
 import { FilterField } from "@/components/filters/field";
 import { FilterLayout, OptionSelect, Pagination, SearchInput } from "@/components/filters/controls";
+import { VisibilityFilters } from "@/components/filters/visibility";
 import { PageHeader } from "@/components/page-header";
 import { PrRow, RowList } from "@/components/rows";
 import { SyncPrsButton } from "@/components/sync-prs";
@@ -12,7 +13,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { repoName } from "@/lib/format";
 import { q } from "@/lib/queries";
 import { title } from "@/lib/route-helpers";
-import { PR_FILTER_KEYS, prListSearch, stripDefaults, validator, type PrListSearch } from "@/lib/search";
+import { PR_FILTER_KEYS, prListSearch, stripDefaults, validator, visibilityInput, type PrListSearch } from "@/lib/search";
 import { cn } from "@/lib/utils";
 import { m } from "@/messages";
 
@@ -34,9 +35,10 @@ function Prs() {
     [navigate],
   );
   const settings = useQuery(q.settings());
-  const repos = useQuery(q.repos({ pageSize: 200 }));
+  const repos = useQuery(q.repos({ pageSize: 200, ...(search.muted ? { includeMuted: true } : {}) }));
   const hasForges = (settings.data?.forges.length ?? 0) > 0;
-  const filter = { repo: search.repo || undefined, state: search.state, text: search.q || undefined, checks: search.checks || undefined };
+  // "Mine" on pull requests means the PR author is one of your accounts (not the repository owner).
+  const filter = { repo: search.repo || undefined, state: search.state, text: search.q || undefined, checks: search.checks || undefined, ...visibilityInput(search) };
   const prs = useQuery({ ...q.prs({ ...filter, page: search.page, pageSize: PAGE_SIZE }), placeholderData: keepPreviousData, enabled: hasForges });
   const page = prs.data;
   const items = page?.items ?? [];
@@ -56,7 +58,7 @@ function Prs() {
       ) : (
         <FilterLayout
           activeCount={activeCount}
-          onReset={() => update({ state: "open", repo: "", checks: "" })}
+          onReset={() => update({ state: "open", repo: "", checks: "", owner: "all", muted: false })}
           toolbar={<SearchInput value={search.q} onChange={(v) => update({ q: v }, true)} placeholder={m.prs.searchPlaceholder} />}
           panel={(p) => (
             <>
@@ -76,6 +78,7 @@ function Prs() {
                 <OptionSelect id={p + "checks"} value={search.checks} onChange={(checks) => update({ checks })} anyLabel={m.any}
                   options={CHECKS.map((c) => ({ value: c, label: m.prs.checks[c] }))} />
               </FilterField>
+              <VisibilityFilters label={m.visibility.author} owner={search.owner} muted={search.muted} onChange={update} />
             </>
           )}
         >

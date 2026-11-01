@@ -28,10 +28,15 @@ import type {
   PullRequestCommit,
   PullRequestDetail,
   Settings,
+  SettingsUpdate,
+  SettingsView,
   State,
   Thread,
   Verdict,
   Worktree,
+  CloneDeletionSummary,
+  RepositoryDeletionSummary,
+  DeletedRepository,
 } from "@/domain/model";
 
 export type {
@@ -56,23 +61,40 @@ export type {
   PullRequestCommit,
   PullRequestDetail,
   Settings,
+  SettingsUpdate,
+  SettingsView,
   State,
   Thread,
   Verdict,
   Worktree,
+  CloneDeletionSummary,
+  RepositoryDeletionSummary,
+  DeletedRepository,
 };
+
+/** Contract v4.1: ownership and mute flags of a repository. */
+export type RepositoryFlags = {
+  /** Owner component of host/owner/name; null for local keys. */
+  owner: string | null;
+  mine: boolean;
+  muted: boolean;
+};
+/** Contract v4.1 list filters. */
+export type Visibility = { includeMuted?: boolean; mine?: boolean };
+/** Result of a `planRepositoryDeletion` job. */
+export type RepositoryDeletionPlan = { actions: PlannedAction[]; summary: RepositoryDeletionSummary };
 
 export type Page<T> = { items: T[]; total: number; page: number; pageSize: number };
 export type JobRef = { id: string };
 
 export type LandingMethod = LandedVia["method"];
 export type LandingVia = Landing["via"];
-export type LandingQuery = { repo: string; base?: string; since?: string; page: number; pageSize: number };
-export type BranchHistoryQuery = { text?: string; repo?: string; gone?: boolean; page: number; pageSize: number };
+export type LandingQuery = Visibility & { repo: string; base?: string; since?: string; page: number; pageSize: number };
+export type BranchHistoryQuery = Visibility & { text?: string; repo?: string; gone?: boolean; page: number; pageSize: number };
 
 // ---------- inventory read models
 
-export type RepositorySummary = {
+export type RepositorySummary = RepositoryFlags & {
   id: string;
   key: string;
   name: string;
@@ -87,6 +109,8 @@ export type FileChange = Worktree["files"][number];
 export type BranchInfo = DomainBranch;
 
 export type Clone = Omit<DomainClone, "branches" | "remoteBranches" | "worktrees"> & {
+  /** Inventory clone id (`host:path`), as `planRepositoryDeletion` expects. */
+  id: string;
   host: string;
   branches: readonly BranchInfo[];
   remoteBranches: readonly BranchInfo[];
@@ -114,7 +138,7 @@ export type BranchGroup = {
   landedVia: LandedVia | null;
 };
 
-export type RepositoryDetail = {
+export type RepositoryDetail = RepositoryFlags & {
   key: string;
   clones: Clone[];
   branches: BranchGroup[];
@@ -154,11 +178,13 @@ export type Dashboard = {
   runningAgentRuns: number;
   lastScan: Scan | null;
   jevEnabled: boolean;
+  /** Distinct muted repositories; every other count excludes them. */
+  mutedRepositories: number;
 };
 
 // ---------- list input
 
-export type ListInput = {
+export type ListInput = Visibility & {
   missing?: boolean;
   jev?: "delete" | "archive" | "keep" | "finish_and_merge";
   verdicts?: readonly Verdict[];
@@ -181,7 +207,7 @@ export type ChecksState = ChecksSummary["state"];
 export type PullRequestState = PullRequest["state"];
 export type ReviewState = PullRequest["review"];
 export type PullRequestFile = PullRequestDetail["files"][number];
-export type PullRequestQuery = {
+export type PullRequestQuery = Visibility & {
   checks?: ChecksState;
   repo?: string;
   state?: PullRequestState | "all";

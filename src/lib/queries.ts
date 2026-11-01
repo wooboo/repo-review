@@ -1,7 +1,11 @@
-import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useEffect, useSyncExternalStore } from "react";
 import * as api from "@/lib/api/client";
-import type { AgentRunQuery, BranchHistoryQuery, LandingQuery, ListInput, LiveEvent, PlannedAction, PullRequestQuery, Verdict } from "@/lib/api/types";
+import { errorMessage } from "@/lib/api/pages";
+import { repoName } from "@/lib/format";
+import { toast } from "@/lib/toast";
+import { m } from "@/messages";
+import type { AgentRunQuery, BranchHistoryQuery, LandingQuery, ListInput, LiveEvent, Page, PlannedAction, PullRequestQuery, RepositoryDetail, RepositorySummary, Verdict, Visibility } from "@/lib/api/types";
 
 /** Inventory queries share the "inv" prefix so a finished scan can refresh all of them at once. */
 export const q = {
@@ -10,7 +14,7 @@ export const q = {
   repo: (id: string) => queryOptions({ queryKey: ["inv", "repo", id], queryFn: () => api.getRepository(id) }),
   branches: (input: Omit<ListInput, "verdict"> & { verdicts?: readonly Verdict[] }) =>
     queryOptions({ queryKey: ["inv", "branches", input], queryFn: () => api.searchBranches(input) }),
-  allBranches: () => queryOptions({ queryKey: ["inv", "branches", "all"], queryFn: () => api.allBranches(), staleTime: 60_000 }),
+  allBranches: (input: Visibility = {}) => queryOptions({ queryKey: ["inv", "branches", "all", input], queryFn: () => api.allBranches(input), staleTime: 60_000 }),
   branch: (id: string) => queryOptions({ queryKey: ["inv", "branch", id], queryFn: () => api.getBranch(id) }),
   worktrees: (input: ListInput) => queryOptions({ queryKey: ["inv", "worktrees", input], queryFn: () => api.allWorktrees(input) }),
   scans: () => queryOptions({ queryKey: ["scans"], queryFn: api.listScans }),
@@ -25,6 +29,8 @@ export const q = {
   actions: (input: { page: number; pageSize: number }) => queryOptions({ queryKey: ["actions", input], queryFn: () => api.listActions(input) }),
   landings: (input: LandingQuery) => queryOptions({ queryKey: ["inv", "landings", input], queryFn: () => api.listLandings(input) }),
   history: (input: BranchHistoryQuery) => queryOptions({ queryKey: ["inv", "history", input], queryFn: () => api.listBranchHistory(input) }),
+  /** Tombstones of deleted repositories; under "inv" so a purge's inventory event refreshes it. */
+  deletedRepos: () => queryOptions({ queryKey: ["inv", "deleted"], queryFn: api.listDeletedRepositories }),
   job: <T>(id: string, result: (v: unknown) => T) => queryOptions({ queryKey: ["job", id], queryFn: () => api.getBackgroundJob(id, result) }),
 };
 
@@ -126,4 +132,54 @@ export function useJob<T>(id: string | null, result: (v: unknown) => T) {
     enabled: id !== null,
     refetchInterval: (query) => (["running", "paused"].includes(query.state.data?.status ?? "") || !query.state.data ? 1000 : false),
   });
+}
+
+// ---------- mute (Contract v4.1)
+
+/**
+ * Optimistically applies a mute change to cached repository lists and details: lists that hide
+ * muted repositories drop a newly muted row at once, lists that show them update its flag.
+ */
+export function applyMuted(client: QueryClient, repositoryId: string, muted: boolean) {
+  for (const [key, data] of client.getQueriesData<Page<RepositorySummary>>({ queryKey: ["inv", "repos"] })) {
+    if (!data) continue;
+    const input = (key[2] ?? {}) as ListInput;
+    const hide = muted && !input.includeMuted;
+    const items = hide ? data.items.filter((r) => r.key !== repositoryId) : data.items.map((r) => (r.key === repositoryId ? { ...r, muted } : r));
+    client.setQueryData(key, { ...data, items, total: data.total - (data.items.length - items.length) });
+  }
+  client.setQueryData<RepositoryDetail>(["inv", "repo", repositoryId], (r) => (r ? { ...r, muted } : r));
+}
+
+/**
+ * Mute or unmute a repository: optimistic flag, rollback on error, then every list refetches.
+ * Feedback lives in the hook-level callbacks because a newly muted row unmounts right away.
+ */
+export function useSetMuted() {
+  const client = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: (input: { repositoryId: string; muted: boolean }) => api.setRepositoryMuted(input),
+    onMutate: async ({ repositoryId, muted }) => {
+      await client.cancelQueries({ queryKey: ["inv"] });
+      const snapshot = [...client.getQueriesData({ queryKey: ["inv", "repos"] }), ...client.getQueriesData({ queryKey: ["inv", "repo", repositoryId] })];
+      applyMuted(client, repositoryId, muted);
+      return { snapshot };
+    },
+    onError: (e, _input, context) => {
+      for (const [key, data] of context?.snapshot ?? []) client.setQueryData(key, data);
+      toast(errorMessage(e));
+    },
+    onSuccess: ({ repositoryId, muted }) => {
+      const name = repoName(repositoryId);
+      toast(muted ? m.mute.done(name) : m.mute.undone(name), {
+        action: { label: m.mute.undo, onClick: () => mutation.mutate({ repositoryId, muted: !muted }) },
+      });
+    },
+    onSettled: () => {
+      // Lists, counts and the PR cache all filter muted repositories on the server.
+      void client.invalidateQueries({ queryKey: ["inv"] });
+      void client.invalidateQueries({ queryKey: ["prs"] });
+    },
+  });
+  return mutation;
 }
