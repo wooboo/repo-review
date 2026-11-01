@@ -42,15 +42,19 @@ function Worktrees() {
   const verdicts = useMemo(() => new Map((branches.data ?? []).map((b) => [b.id, b.verdict])), [branches.data]);
   const flow = useActionFlow();
   const client = useQueryClient();
+  const w2v = (w: WorktreeItem): Verdict | undefined => (w.branch ? verdicts.get(branchId(w.repo, w.branch)) : undefined);
   const groups = useMemo(() => {
     const all = (rows.data ?? []).filter((w) => !search.status || worktreeStatus(w) === search.status);
     return {
       changes: all.filter((w) => worktreeStatus(w) === "changes").sort((a, b) => newest(b).localeCompare(newest(a))),
       missing: all.filter((w) => worktreeStatus(w) === "missing"),
-      clean: all.filter((w) => worktreeStatus(w) === "clean"),
+      // Checkouts that can switch back to their base come first.
+      clean: all
+        .filter((w) => worktreeStatus(w) === "clean")
+        .sort((a, b) => Number(canSwitchToBase(b, w2v(b))) - Number(canSwitchToBase(a, w2v(a)))),
       total: all.length,
     };
-  }, [rows.data, search.status]);
+  }, [rows.data, search.status, verdicts]);
   const activeCount = worktreeSearch.activeCount(search, WORKTREE_FILTER_KEYS);
 
   /** Target clone path comes from the repository detail (one key can have several clones per host). */
@@ -64,7 +68,7 @@ function Worktrees() {
     flow.start(request);
   };
   const actionsFor = (w: WorktreeItem) => {
-    const verdict: Verdict | undefined = w.branch ? verdicts.get(branchId(w.repo, w.branch)) : undefined;
+    const verdict = w2v(w);
     if (canPrune(w))
       return (
         <Button variant="outline" className="h-11 md:h-8" onClick={() => void plan(w, "prune-worktree")}>
@@ -79,6 +83,7 @@ function Worktrees() {
       );
     return undefined;
   };
+  const cleanHasActions = groups.clean.some((w) => actionsFor(w) !== undefined);
   const card = (w: WorktreeItem) => <WorktreeCard key={w.id} worktree={w} actions={actionsFor(w)} />;
 
   return (
@@ -129,7 +134,12 @@ function Worktrees() {
               </Section>
             )}
             {groups.clean.length > 0 && (
-              <Collapsible defaultOpen={search.status === "clean" || (!groups.changes.length && !groups.missing.length)} className="flex flex-col gap-2">
+              <Collapsible
+                // Re-mounts (and opens) once branch verdicts reveal a checkout that can switch to its base.
+                key={cleanHasActions ? "actions" : "plain"}
+                defaultOpen={search.status === "clean" || (!groups.changes.length && !groups.missing.length) || cleanHasActions}
+                className="flex flex-col gap-2"
+              >
                 <CollapsibleTrigger className="group flex min-h-11 items-center gap-2 text-left text-sm font-semibold tracking-tight text-muted-foreground uppercase md:min-h-8">
                   {m.worktrees.clean(groups.clean.length)}
                   <ChevronDownIcon className="size-4 transition-transform group-data-[state=open]:rotate-180" />

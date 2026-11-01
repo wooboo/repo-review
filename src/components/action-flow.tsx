@@ -135,8 +135,6 @@ export function actionHeadline(a: Pick<PlannedAction, "kind" | "target">): strin
       return `${t.remote ?? "origin"} → ${t.url ?? ""}`;
     case "push-branch":
       return `${t.branch ?? ""} → ${t.remote ?? "origin"}`;
-    case "switch-to-base":
-      return t.worktree ? `${t.branch ?? ""} · ${t.worktree}` : (t.branch ?? "");
     default:
       return t.branch ?? t.worktree ?? m.actions.kind[a.kind];
   }
