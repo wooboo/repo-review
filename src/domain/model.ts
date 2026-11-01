@@ -70,6 +70,8 @@ export const FileChange = Schema.Struct({
   mtime: Schema.NullOr(Schema.String),
 });
 export const Worktree = Schema.Struct({
+  newestChangeAt: Schema.optional(Schema.NullOr(Schema.String)),
+  lastGitActivityAt: Schema.optional(Schema.NullOr(Schema.String)),
   path: Schema.String,
   head: Schema.String,
   branch: Schema.NullOr(Schema.String),
@@ -95,6 +97,15 @@ export const Divergence = Schema.Struct({
   behind: Schema.Number,
 });
 export const Branch = Schema.Struct({
+  authorDate: Schema.optional(Schema.String),
+  mergeBaseDate: Schema.optional(Schema.NullOr(Schema.String)),
+  baseMovedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  firstOwnCommitAt: Schema.optional(Schema.NullOr(Schema.String)),
+  lastOwnCommitAt: Schema.optional(Schema.NullOr(Schema.String)),
+  cherryApplied: Schema.optional(Schema.Number),
+  cherryUnapplied: Schema.optional(Schema.Number),
+  upstreamAhead: Schema.optional(Schema.Number),
+  upstreamBehind: Schema.optional(Schema.Number),
   name: Schema.String,
   sha: Schema.String,
   date: Schema.String,
@@ -120,6 +131,7 @@ export const Branch = Schema.Struct({
 });
 export type Branch = typeof Branch.Type;
 export const Remote = Schema.Struct({
+  lastFetchAt: Schema.optional(Schema.NullOr(Schema.String)),
   name: Schema.String,
   url: Schema.String,
   pushurl: Schema.String,
@@ -128,6 +140,8 @@ export const Remote = Schema.Struct({
   fetchError: Schema.NullOr(Schema.String),
 });
 export const Clone = Schema.Struct({
+  firstCommitAt: Schema.optional(Schema.String),
+  lastCommitAt: Schema.optional(Schema.String),
   path: Schema.String,
   commonDir: Schema.String,
   name: Schema.String,
@@ -222,3 +236,225 @@ export function stripDefaults(input: unknown) {
     ),
   );
 }
+
+export const ChecksSummary = Schema.Struct({
+  state: Schema.Literals(["success", "failure", "pending", "none"]),
+  total: Schema.Number,
+  failed: Schema.Number,
+  pending: Schema.Number,
+});
+export type ChecksSummary = typeof ChecksSummary.Type;
+export const PullRequest = Schema.Struct({
+  id: Schema.String,
+  repo: Schema.String,
+  forge: Schema.Literals(["github", "forgejo"]),
+  number: Schema.Number,
+  title: Schema.String,
+  url: Schema.String,
+  author: Schema.String,
+  state: Schema.Literals(["open", "merged", "closed"]),
+  draft: Schema.Boolean,
+  head: Schema.String,
+  headSha: Schema.String,
+  base: Schema.String,
+  branchId: Schema.NullOr(Schema.String),
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+  mergedAt: Schema.NullOr(Schema.String),
+  checks: ChecksSummary,
+  review: Schema.Literals([
+    "approved",
+    "changes_requested",
+    "review_required",
+    "none",
+  ]),
+  mergeable: Schema.NullOr(Schema.Boolean),
+});
+export type PullRequest = typeof PullRequest.Type;
+export const PullRequestDetail = Schema.Struct({
+  ...PullRequest.fields,
+  body: Schema.String,
+  files: Schema.Array(
+    Schema.Struct({
+      path: Schema.String,
+      status: Schema.String,
+      additions: Schema.Number,
+      deletions: Schema.Number,
+    }),
+  ),
+  diff: Schema.String,
+  diffTruncated: Schema.Boolean,
+  checkRuns: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      state: ChecksSummary.fields.state,
+      url: Schema.NullOr(Schema.String),
+    }),
+  ),
+  reviews: Schema.Array(
+    Schema.Struct({
+      author: Schema.String,
+      state: Schema.String,
+      body: Schema.String,
+      at: Schema.String,
+    }),
+  ),
+  comments: Schema.Array(
+    Schema.Struct({
+      author: Schema.String,
+      body: Schema.String,
+      at: Schema.String,
+    }),
+  ),
+});
+export type PullRequestDetail = typeof PullRequestDetail.Type;
+export const PageInput = Schema.Struct({
+  page: Schema.optional(Schema.Number),
+  pageSize: Schema.optional(Schema.Number),
+});
+export const PullRequestListInput = Schema.Struct({
+  ...PageInput.fields,
+  repo: Schema.optional(Schema.String),
+  state: Schema.optional(Schema.Literals(["open", "closed", "merged", "all"])),
+  text: Schema.optional(Schema.String),
+});
+export const CreatePullRequestInput = Schema.Struct({
+  branchId: Schema.String,
+  cloneHost: Schema.optional(Schema.String),
+  base: Schema.optional(Schema.String),
+  title: Schema.String,
+  body: Schema.String,
+  draft: Schema.Boolean,
+});
+export const MergePullRequestInput = Schema.Struct({
+  id: Schema.String,
+  method: Schema.Literals(["merge", "squash", "rebase"]),
+  deleteRemoteBranch: Schema.Boolean,
+});
+export const ActionKind = Schema.Literals([
+  "delete-branch",
+  "archive-and-delete",
+  "switch-to-base",
+  "prune-worktree",
+  "fast-forward-base",
+  "push-branch",
+  "set-remote-url",
+]);
+export type ActionKind = typeof ActionKind.Type;
+export const ActionTarget = Schema.Struct({
+  host: Schema.String,
+  repo: Schema.String,
+  branch: Schema.optional(Schema.String),
+  worktree: Schema.optional(Schema.String),
+  remote: Schema.optional(Schema.String),
+  url: Schema.optional(Schema.String),
+});
+export type ActionTarget = typeof ActionTarget.Type;
+export const PlannedAction = Schema.Struct({
+  id: Schema.String,
+  kind: ActionKind,
+  target: ActionTarget,
+  branchId: Schema.NullOr(Schema.String),
+  repoKey: Schema.String,
+  status: ActionResult.fields.status,
+  reason: Schema.String,
+  restore: Schema.NullOr(Schema.String),
+  createdAt: Schema.String,
+  finishedAt: Schema.NullOr(Schema.String),
+});
+export type PlannedAction = typeof PlannedAction.Type;
+export const PlanActionsInput = Schema.Struct({
+  kind: ActionKind,
+  branchIds: Schema.optional(Schema.Array(Schema.String)),
+  filter: Schema.optional(ListInput),
+  targets: Schema.optional(Schema.Array(ActionTarget)),
+});
+export const ActionListInput = Schema.Struct({
+  ...PageInput.fields,
+  repo: Schema.optional(Schema.String),
+  status: Schema.optional(ActionResult.fields.status),
+});
+export const AgentTask = Schema.Literals([
+  "review-branch",
+  "make-pr",
+  "review-pr",
+  "cleanup-repo",
+  "describe-repo",
+  "custom",
+]);
+export type AgentTask = typeof AgentTask.Type;
+export const AgentInfo = Schema.Struct({
+  id: Schema.String,
+  label: Schema.String,
+  kind: Schema.Literals(["acp", "cli"]),
+  models: Schema.Array(Schema.String),
+  defaultModel: Schema.String,
+});
+export type AgentInfo = typeof AgentInfo.Type;
+export const AgentRunInput = Schema.Struct({
+  agentId: Schema.String,
+  model: Schema.optional(Schema.String),
+  task: AgentTask,
+  repo: Schema.String,
+  host: Schema.optional(Schema.String),
+  branchId: Schema.optional(Schema.String),
+  pullRequestId: Schema.optional(Schema.String),
+  note: Schema.optional(Schema.String),
+  worktree: Schema.Literals(["new", "existing", "none"]),
+});
+export type AgentRunInput = typeof AgentRunInput.Type;
+export const AgentRun = Schema.Struct({
+  id: Schema.String,
+  agentId: Schema.String,
+  model: Schema.String,
+  task: AgentTask,
+  repo: Schema.String,
+  branchId: Schema.NullOr(Schema.String),
+  pullRequestId: Schema.NullOr(Schema.String),
+  cwd: Schema.String,
+  status: Schema.Literals(["queued", "running", "done", "failed", "cancelled"]),
+  summary: Schema.NullOr(Schema.String),
+  costUsd: Schema.NullOr(Schema.Number),
+  pullRequestUrl: Schema.NullOr(Schema.String),
+  startedAt: Schema.String,
+  finishedAt: Schema.NullOr(Schema.String),
+});
+export type AgentRun = typeof AgentRun.Type;
+export const AgentEvent = Schema.Struct({
+  seq: Schema.Number,
+  at: Schema.String,
+  kind: Schema.Literals([
+    "message",
+    "thought",
+    "tool",
+    "permission",
+    "status",
+    "error",
+  ]),
+  text: Schema.String,
+});
+export type AgentEvent = typeof AgentEvent.Type;
+export const AgentListInput = Schema.Struct({
+  ...PageInput.fields,
+  repo: Schema.optional(Schema.String),
+  status: Schema.optional(AgentRun.fields.status),
+});
+
+export const About = Schema.Struct({
+  summary: Schema.String,
+  description: Schema.String,
+  kind: Schema.String,
+  generatedAt: Schema.String,
+});
+export type About = typeof About.Type;
+export const JevClassification = Schema.Struct({
+  recommendation: Schema.Literals([
+    "delete",
+    "archive",
+    "keep",
+    "finish_and_merge",
+  ]),
+  confidence: Schema.Number,
+  flags: Schema.Array(Schema.String),
+});
+export type JevClassification = typeof JevClassification.Type;

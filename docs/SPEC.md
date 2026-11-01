@@ -9,23 +9,23 @@ Single user, trusted network, no authentication (for now). English only.
 
 ## 1. Agreed stack (fit table)
 
-| Concern | Verdict | Choice / reason |
-|---|---|---|
-| Language | keep | TypeScript 7 (`strict`, no `any`) |
-| Runtime, package manager, tests | keep | Bun (`bun install`, `bun test`) |
-| Framework | keep | TanStack Start (React, file routes, server functions), Nitro `bun` preset |
-| DB | keep | SQLite via `bun:sqlite` + Drizzle ORM, drizzle-kit migrations applied at start, WAL |
-| Styling, components | keep | Tailwind CSS v4, shadcn/ui, lucide-react icons |
-| Logic, validation | keep | Effect v4 services/layers, typed errors, `Schema` for every domain type and input |
-| URL state | keep | every view is a route; filters/sort/paging in the query string (`validateSearch` + Schema, defaults stripped) |
-| i18n | trim | English only, no locale switcher; user-visible strings still live in one messages module, not inline |
-| Dark mode | keep | light / dark / system (default system), cookie, no flash |
-| Palettes | trim | two palettes (neutral + one accent), cookie |
-| MCP server | keep | `/mcp`, Streamable HTTP, official TS SDK; no auth unless `MCP_TOKEN` is set |
-| Host collector | swap | TypeScript single-file collector run with Bun on each host (local spawn or `ssh host bun run -`); no Python |
-| AI agents | add | ACP (Agent Client Protocol) and plain CLI agents, model chosen per run |
-| Jev (TypeSafe) | add, optional | calibrated junk classification; enabled only when `TYPESAFE_API_KEY` is set |
-| Postgres | drop | one instance on one host |
+| Concern                         | Verdict       | Choice / reason                                                                                               |
+| ------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------- |
+| Language                        | keep          | TypeScript 7 (`strict`, no `any`)                                                                             |
+| Runtime, package manager, tests | keep          | Bun (`bun install`, `bun test`)                                                                               |
+| Framework                       | keep          | TanStack Start (React, file routes, server functions), Nitro `bun` preset                                     |
+| DB                              | keep          | SQLite via `bun:sqlite` + Drizzle ORM, drizzle-kit migrations applied at start, WAL                           |
+| Styling, components             | keep          | Tailwind CSS v4, shadcn/ui, lucide-react icons                                                                |
+| Logic, validation               | keep          | Effect v4 services/layers, typed errors, `Schema` for every domain type and input                             |
+| URL state                       | keep          | every view is a route; filters/sort/paging in the query string (`validateSearch` + Schema, defaults stripped) |
+| i18n                            | trim          | English only, no locale switcher; user-visible strings still live in one messages module, not inline          |
+| Dark mode                       | keep          | light / dark / system (default system), cookie, no flash                                                      |
+| Palettes                        | trim          | two palettes (neutral + one accent), cookie                                                                   |
+| MCP server                      | keep          | `/mcp`, Streamable HTTP, official TS SDK; no auth unless `MCP_TOKEN` is set                                   |
+| Host collector                  | swap          | TypeScript single-file collector run with Bun on each host (local spawn or `ssh host bun run -`); no Python   |
+| AI agents                       | add           | ACP (Agent Client Protocol) and plain CLI agents, model chosen per run                                        |
+| Jev (TypeSafe)                  | add, optional | calibrated junk classification; enabled only when `TYPESAFE_API_KEY` is set                                   |
+| Postgres                        | drop          | one instance on one host                                                                                      |
 
 ## 2. Domain
 
@@ -39,7 +39,7 @@ Single user, trusted network, no authentication (for now). English only.
 - **Clone**: one repository directory on one host (several clones of one repo on one host are allowed).
 - **Branch** (local), **remote branch**, **worktree**, **stash**: as in git, per clone.
 - **Base**: candidate bases are the default branch of every remote (from `refs/remotes/<r>/HEAD`, else `ls-remote
-  --symref`) plus `main`, `master`, `integration`, `develop`, `trunk` on `origin`/`upstream`; without remotes, a
+--symref`) plus `main`, `master`, `integration`, `develop`, `trunk` on `origin`/`upstream`; without remotes, a
   local trunk. Each branch picks the candidate with the fewest commits ahead (ties: origin's default).
 - **Branch state** (per clone), first match wins:
   `base` · `merged` (ancestor of base) · `patch-merged` (`git cherry` shows no unique commit) · `squash-merged`
@@ -193,48 +193,23 @@ Env: `PORT`, `DATABASE_PATH` (outside the repo), optional `MCP_TOKEN`, `TYPESAFE
 Run in production with `bun .output/server/index.mjs` as a systemd user service. Scheduled daily scan inside the
 server process. Backups: copy of the SQLite file (`VACUUM INTO`) daily.
 
-## Backend foundation implementation status
+## Backend implementation status
 
-The sections above remain the target product contract. This first backend branch
-implements an inventory/scan/cleanup foundation and a provisional UI contract
-in `API.md`. The following are deliberate implementation deviations, not changes
-to the target behavior:
+Contract v2 in API.md replaces the foundation's provisional forge/action/agent
+interfaces. The backend now has normalized PRs, all seven planned action kinds,
+task templates, cursor events, SSE invalidation, restart recovery, durable schedule
+claims, retained SQLite backups, and per-entity Drizzle migrations with inventory
+relations. Read-only host validation and temporary-repository safety tests are
+recorded in the backend PR.
 
-- Persistence currently uses a Drizzle `records` table with kind/id/host/JSON/updated
-  columns. Clones contain branches, worktrees, files, remotes and stashes; current
-  state replacement is atomic per host. This makes versioned host snapshots easy
-  to ingest without flattening them twice. The separate relational tables and
-  per-entity Schema codecs specified in §4 remain follow-up work before scaling.
-- Effect provides one application service with a shared scoped ManagedRuntime;
-  the application composes ordinary host/forge/agent modules. Dedicated Effect
-  layers and typed errors for each subsystem remain to be extracted for stronger
-  fault injection and narrower dependencies.
-- The worker supports integrated branch deletion and archive-before-delete.
-  Switch-to-base, detach-base, local fast-forward, safe missing-worktree pruning,
-  remote editing/renaming and explicit push operations are not implemented.
-  They are left unavailable rather than weakening their safety preconditions.
-- Collector analysis covers the merge-state sequence, divergence, contained refs,
-  worktree files, root commits, remotes, stashes, T3 links and basic about material.
-  Full date/activity/cherry metadata, extension inventory, explicit fetch timestamps,
-  bounded parallelism/`--jobs`, and a repository service for remote-only branches
-  remain to be completed. `--no-fetch` does not perform remote HEAD discovery.
-- Forge identity resolves matching remotes, migrated origins and root-commit
-  existence; PR cache refreshes after configured-forge scans and explicit listing.
-  PR check/status aggregation, fully paginated detail files/reviews, GitHub search,
-  private-repository creation followed by host-side push, and structured per-operation
-  input/output schemas remain incomplete. No live forge mutations were validated.
-- CLI and ACP agent runs, events, cursor polling and cancel are implemented. Runs
-  currently use explicit prompts rather than task templates; ACP agents must support
-  `session/set_config_option` model selection. Events remain embedded JSON records.
-  Agent restart recovery, process-tree cancellation, model-adapter compatibility,
-  remote agent execution and separate event storage remain follow-up work.
-- UI action/description/classification jobs have ids and polling. MCP cleanup
-  currently waits for direct results. Daily scan scheduling is process-local;
-  durable daily deduplication and daily database backup are not yet implemented.
-- The default description command and optional Jev request/cache are present;
-  live description and Jev response validation/calibration have not been verified.
-- The minimal placeholder UI is intentionally English-only plain markup; full
-  theme/message abstractions belong to the subsequent UI implementation.
+The upgrade preserves settings and requires a fresh inventory scan. Snapshot JSON
+remains the collector boundary and grouped inventory read model; relational
+projections support entity joins and integrity, and SQL handles PR/action/run
+filtering and paging. Subsystem layers share one application lifetime.
 
-These limitations are published so callers can build against the actual foundation
-without assuming unfinished destructive or forge workflows are available.
+Agent execution supports local and SSH-host clones. Remote process groups are
+supervised and terminated when their SSH input closes. Use a home-relative
+worktree directory for hosts with different filesystem layouts. Description and
+Jev integrations validate their structured results, but live Jev calibration still
+requires an API key. The UI
+remains separately owned and is not part of this backend change.
