@@ -70,6 +70,27 @@ export function makeApplication(path?: string) {
     Schema.decodeUnknownSync(Settings)(db.get("settings", "main"));
   const clones = () => db.list<StoredClone>("clone");
   const branchRows = () => {
+    const config = settings();
+    const runs = db
+      .list<import("../domain/model").AgentRun>("agent")
+      .filter((r) => r.status === "running" || r.status === "queued");
+    const prs = new Map<string, PullRequest>();
+    for (const pr of db
+      .list<PullRequest>("pull_request")
+      .sort(
+        (a, b) =>
+          Number(b.state === "open") - Number(a.state === "open") ||
+          b.updatedAt.localeCompare(a.updatedAt),
+      )) {
+      const key = pr.repo + "#" + pr.head;
+      if (!prs.has(key)) prs.set(key, pr);
+    }
+    const classifications = process.env.TYPESAFE_API_KEY
+      ? db.list<{
+          id: string;
+          value: import("../domain/model").JevClassification;
+        }>("classification")
+      : [];
     const groups = new Map<
       string,
       { clone: StoredClone; branch: Clone["branches"][number] }[]
@@ -91,53 +112,24 @@ export function makeApplication(path?: string) {
           clone.threads.some(
             (t) => t.branch === branch.name && activeStatus(t.status),
           ) ||
-          db
-            .list<{ status: string; branch: string; repo: string }>("agent")
-            .some(
-              (a) =>
-                a.repo === clone.path &&
-                a.branch === branch.name &&
-                a.status === "running",
-            ),
+          runs.some(
+            (r) =>
+              r.repo === clone.key &&
+              (!r.branchId || r.branchId === clone.key + "#" + branch.name),
+          ),
       }));
       return {
-        jev: process.env.TYPESAFE_API_KEY
-          ? (db
-              .list<{
-                id: string;
-                value: {
-                  recommendation:
-                    "delete" | "archive" | "keep" | "finish_and_merge";
-                  confidence: number;
-                  flags: string[];
-                };
-              }>("classification")
-              .find((c) => c.id === id)?.value ?? null)
-          : null,
+        jev: classifications.find((c) => c.id === id)?.value ?? null,
         id,
         name: rows[0].branch.name,
         repo: rows[0].clone.key,
-        verdict: verdict(
-          flags,
-          db
-            .list<PullRequest>("pull_request")
-            .sort(
-              (a, b) =>
-                Number(b.state === "open") - Number(a.state === "open") ||
-                b.updatedAt.localeCompare(a.updatedAt),
-            )
-            .find(
-              (pr) =>
-                pr.repo === rows[0].clone.key &&
-                pr.head === rows[0].branch.name,
-            ),
-        ),
+        verdict: verdict(flags, prs.get(id)),
         dirty: flags.some((f) => f.dirty),
         localOnly: flags.some((f) => f.unpushed > 0),
         stale: rows.every(
           (r) =>
             Date.now() - Date.parse(r.branch.date) >
-            settings().staleDays * 86400000,
+            config.staleDays * 86400000,
         ),
         differentShas: new Set(rows.map((r) => r.branch.sha)).size > 1,
         date:
@@ -196,6 +188,7 @@ export function makeApplication(path?: string) {
         (c) => !input.host || c.host === input.host,
       );
       const keys = [...new Set(selected.map((c) => c.key))];
+      const branches = branchRows();
       return paged(
         keys.map((key) => ({
           about:
@@ -214,7 +207,7 @@ export function makeApplication(path?: string) {
           key,
           name: key.split("/").at(-1) ?? key,
           clones: selected.filter((c) => c.key === key).length,
-          branches: branchRows().filter((b) => b.repo === key).length,
+          branches: branches.filter((b) => b.repo === key).length,
         })),
         input,
       );

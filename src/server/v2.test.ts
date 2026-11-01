@@ -8,6 +8,7 @@ import { makeApplication } from "./application";
 import { taskPrompt, getRun } from "./agents";
 import { normalizePullRequest, normalizeDetail } from "./pull-requests";
 import { toolList } from "../mcp/server";
+import { collectRepo } from "../collector/analyze";
 import { git, out } from "../collector/git";
 import { executeExtra, type WorkerAction } from "../collector/action-worker";
 import type { AgentRunInput } from "../domain/model";
@@ -484,3 +485,30 @@ test("forge refresh normalizes summaries without downloading diffs", async () =>
     }
   }
 });
+
+test("repository read loads PRs once across grouped repositories", () =>
+  fixture((p) => {
+    const app = makeApplication(":memory:");
+    try {
+      const clone = collectRepo(join(p, ".git"), p, false);
+      app.db.replaceHost(
+        "local",
+        Array.from({ length: 6 }, (_, i) => ({
+          ...clone,
+          key: `forge.example/team/repo${i}`,
+          path: join(p, `clone${i}`),
+        })),
+      );
+      const original = app.db.list;
+      const calls: Record<string, number> = {};
+      app.db.list = <T>(kind: string): T[] => {
+        calls[kind] = (calls[kind] ?? 0) + 1;
+        return original<T>(kind);
+      };
+      expect(app.listRepositories().total).toBe(6);
+      expect(calls.pull_request).toBeLessThanOrEqual(1);
+      expect(calls.agent).toBeLessThanOrEqual(1);
+    } finally {
+      void app.close();
+    }
+  }));
