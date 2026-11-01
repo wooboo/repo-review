@@ -6,11 +6,15 @@ import { parseCommit } from "@/lib/format";
 /** Short and full SHAs refer to the same commit when one is a prefix of the other. */
 export const sameSha = (a: string, b: string) => !!a && !!b && (a.startsWith(b) || b.startsWith(a));
 
+type Landable = Pick<BranchGroup, "landedVia" | "clones"> & { verdict?: BranchGroup["verdict"] };
+
 /**
  * Branch-level provenance: the server's value when it sends one, otherwise the PR every clone
  * landed through (the clone with the most extra commits wins, so nothing to review is hidden).
+ * Base branches absorb every PR, so they never show one.
  */
-export function branchLanding(b: Pick<BranchGroup, "landedVia" | "clones">): LandedVia | null {
+export function branchLanding(b: Landable): LandedVia | null {
+  if (b.verdict === "base") return null;
   if (b.landedVia) return b.landedVia;
   const per = b.clones.map((c) => c.landedVia ?? null);
   if (!per.length || per.some((l) => !l)) return null;
@@ -20,8 +24,8 @@ export function branchLanding(b: Pick<BranchGroup, "landedVia" | "clones">): Lan
 }
 
 /** Any clone's provenance, for badges when clones disagree. */
-export const anyLanding = (b: Pick<BranchGroup, "landedVia" | "clones">): LandedVia | null =>
-  branchLanding(b) ?? b.clones.find((c) => c.landedVia)?.landedVia ?? null;
+export const anyLanding = (b: Landable): LandedVia | null =>
+  b.verdict === "base" ? null : (branchLanding(b) ?? b.clones.find((c) => c.landedVia)?.landedVia ?? null);
 
 export type CommitLine = ReturnType<typeof parseCommit>;
 

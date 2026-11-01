@@ -34,6 +34,9 @@ describe("provenance", () => {
     expect(branchLanding({ clones: [] })).toBeNull();
     // Badges still show something when clones disagree.
     expect(anyLanding({ clones: [{ landedVia: null }, { landedVia: one }] as never })).toBe(one);
+    // Base branches absorb every PR; no badge there.
+    expect(branchLanding({ verdict: "base", landedVia: one, clones: [] })).toBeNull();
+    expect(anyLanding({ verdict: "base", clones: [{ landedVia: one }] as never })).toBeNull();
   });
 
   test("only the commits after the PR are left to review", () => {

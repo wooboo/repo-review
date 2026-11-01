@@ -119,7 +119,7 @@ function BranchPage() {
         <Section title={m.branches.perClone} id="clones">
           <div className="grid gap-3 xl:grid-cols-2">
             {b.clones.map((c) => (
-              <CloneCard key={c.host + c.path} c={c} showLanded={!landed} max={Math.max(10, ...b.clones.flatMap((x) => [x.ahead, x.behind]))}
+              <CloneCard key={c.host + c.path} c={c} showLanded={!landed && b.verdict !== "base"} max={Math.max(10, ...b.clones.flatMap((x) => [x.ahead, x.behind]))}
                 onFastForward={canFastForward(c) ? () => setPlan({ kind: "fast-forward-base", targets: [{ host: c.host, repo: c.path, branch: c.name }] }) : undefined} />
             ))}
           </div>
