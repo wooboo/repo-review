@@ -1,0 +1,24 @@
+{
+  "number": 7,
+  "title": "Fixture pull request",
+  "html_url": "https://forge.example/team/repo/pulls/7",
+  "user": {
+    "login": "contributor"
+  },
+  "head": {
+    "ref": "feature",
+    "sha": "8ced7cce4b34acef8d3d60bb4af22a3bf2637188"
+  },
+  "base": {
+    "ref": "main",
+    "sha": "63915747c052ce0dff23275fc3404a840a87d045"
+  },
+  "state": "open",
+  "draft": false,
+  "merged": false,
+  "mergeable": true,
+  "merged_at": null,
+  "created_at": "2026-10-24T14:15:09Z",
+  "updated_at": "2026-10-24T14:15:29Z",
+  "body": "Recorded payload with sanitized identifiers"
+}

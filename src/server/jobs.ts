@@ -6,32 +6,37 @@ export function startJob(
   work: () => Promise<unknown>,
 ) {
   const id = crypto.randomUUID();
+  const started = new Date().toISOString();
   app.db.put("job", id, {
     id,
     kind,
     status: "running",
-    started: new Date().toISOString(),
+    started,
   });
-  void Promise.resolve()
-    .then(work)
-    .then(
-      (result) =>
-        app.db.put("job", id, {
-          id,
-          kind,
-          status: "done",
-          finished: new Date().toISOString(),
-          result: json(result),
-        }),
-      (error) =>
-        app.db.put("job", id, {
-          id,
-          kind,
-          status: "failed",
-          finished: new Date().toISOString(),
-          error: String(error),
-        }),
-    );
+  void app.trackWork(
+    Promise.resolve()
+      .then(work)
+      .then(
+        (result) =>
+          app.db.put("job", id, {
+            id,
+            kind,
+            started,
+            status: "done",
+            finished: new Date().toISOString(),
+            result: json(result),
+          }),
+        (error) =>
+          app.db.put("job", id, {
+            id,
+            kind,
+            started,
+            status: "failed",
+            finished: new Date().toISOString(),
+            error: String(error),
+          }),
+      ),
+  );
   return { id };
 }
 export function getJob(app: ApplicationApi, id: string) {

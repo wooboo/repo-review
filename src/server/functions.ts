@@ -2,8 +2,26 @@ import { startJob, getJob } from "./jobs";
 import { createServerFn } from "@tanstack/react-start";
 import { Schema } from "effect";
 import { withApp } from "./application";
-import { ListInput, IdInput, ScanInput, Settings } from "../domain/model";
-import { AgentRunInput, startRun, getRun, listRuns, cancelRun } from "./agents";
+import {
+  ListInput,
+  IdInput,
+  ScanInput,
+  Settings,
+  PullRequestListInput,
+  CreatePullRequestInput,
+  MergePullRequestInput,
+  PlanActionsInput,
+  ActionListInput,
+  AgentListInput,
+} from "../domain/model";
+import {
+  AgentRunInput,
+  startRun,
+  getRun,
+  listRuns,
+  cancelRun,
+  listAgents as agents,
+} from "./agents";
 import { describe, classify } from "./classify";
 const valid = <S extends Schema.ConstraintDecoder<unknown>>(s: S) =>
   Schema.toStandardSchemaV1(s);
@@ -52,8 +70,16 @@ export const applyActions = createServerFn({ method: "POST" })
       startJob(a, "apply-actions", () => a.applyActions(data.ids)),
     ),
   );
-export const listActions = createServerFn({ method: "GET" }).handler(() =>
-  withApp((a) => a.getActions()),
+export const planActions = createServerFn({ method: "POST" })
+  .validator(valid(PlanActionsInput))
+  .handler(({ data }) =>
+    withApp((a) => startJob(a, "plan-actions", () => a.planActions(data))),
+  );
+export const listActions = createServerFn({ method: "GET" })
+  .validator(valid(ActionListInput))
+  .handler(({ data }) => withApp((a) => a.listActions(data)));
+export const listAgents = createServerFn({ method: "GET" }).handler(() =>
+  withApp((a) => agents(a)),
 );
 export const startAgentRun = createServerFn({ method: "POST" })
   .validator(valid(AgentRunInput))
@@ -68,60 +94,39 @@ export const getAgentRun = createServerFn({ method: "GET" })
     ),
   )
   .handler(({ data }) => withApp((a) => getRun(a, data.id, data.cursor)));
-export const listAgentRuns = createServerFn({ method: "GET" }).handler(() =>
-  withApp((a) => listRuns(a)),
-);
+export const listAgentRuns = createServerFn({ method: "GET" })
+  .validator(valid(AgentListInput))
+  .handler(({ data }) => withApp((a) => listRuns(a, data)));
 export const cancelAgentRun = createServerFn({ method: "POST" })
   .validator(valid(IdInput))
   .handler(({ data }) => withApp((a) => cancelRun(a, data.id)));
-// Forge responses retain their upstream JSON shape, wrapped for Start's serializer.
 export const listPullRequests = createServerFn({ method: "GET" })
-  .validator(valid(IdInput))
-  .handler(({ data }) =>
-    withApp(async (a) => ({
-      json: JSON.stringify(await a.refreshPullRequests(data.id)),
-    })),
-  );
+  .validator(valid(PullRequestListInput))
+  .handler(({ data }) => withApp((a) => a.listPullRequests(data)));
 export const getPullRequest = createServerFn({ method: "GET" })
-  .validator(
-    valid(Schema.Struct({ repo: Schema.String, number: Schema.Number })),
-  )
+  .validator(valid(IdInput))
+  .handler(({ data }) => withApp((a) => a.getPullRequest(data.id)));
+export const refreshPullRequests = createServerFn({ method: "POST" })
+  .validator(valid(Schema.Struct({ repo: Schema.optional(Schema.String) })))
   .handler(({ data }) =>
-    withApp(async (a) => ({
-      json: JSON.stringify(await a.forge().detail(data.repo, data.number)),
-    })),
-  );
-export const forgeOperation = createServerFn({ method: "POST" })
-  .validator(
-    valid(
-      Schema.Struct({
-        repo: Schema.String,
-        operation: Schema.Literals([
-          "create",
-          "merge",
-          "close",
-          "comment",
-          "metadata",
-          "search",
-          "create-repository",
-        ]),
-        json: Schema.String,
-      }),
-    ),
-  )
-  .handler(({ data }) =>
-    withApp(async (a) => ({
-      json: JSON.stringify(
-        await a
-          .forge()
-          .operation(
-            data.repo,
-            data.operation,
-            JSON.parse(data.json) as Record<string, unknown>,
-          ),
+    withApp((a) =>
+      startJob(a, "refresh-pull-requests", () =>
+        a.refreshPullRequests(data.repo),
       ),
-    })),
+    ),
   );
+export const createPullRequest = createServerFn({ method: "POST" })
+  .validator(valid(CreatePullRequestInput))
+  .handler(({ data }) => withApp((a) => a.createPullRequest(data)));
+export const mergePullRequest = createServerFn({ method: "POST" })
+  .validator(valid(MergePullRequestInput))
+  .handler(({ data }) => withApp((a) => a.mergePullRequest(data)));
+export const closePullRequest = createServerFn({ method: "POST" })
+  .validator(valid(IdInput))
+  .handler(({ data }) => withApp((a) => a.closePullRequest(data.id)));
+export const commentPullRequest = createServerFn({ method: "POST" })
+  .validator(valid(Schema.Struct({ id: Schema.String, body: Schema.String })))
+  .handler(({ data }) => withApp((a) => a.commentPullRequest(data)));
 export const describeRepository = createServerFn({ method: "POST" })
   .validator(valid(IdInput))
   .handler(({ data }) =>

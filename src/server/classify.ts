@@ -1,3 +1,5 @@
+import { Schema } from "effect";
+import { JevClassification } from "../domain/model";
 import { spawn } from "node:child_process";
 import type { ApplicationApi } from "./application";
 const fingerprint = (value: unknown) =>
@@ -11,8 +13,12 @@ export async function describe(app: ApplicationApi, key: string) {
   if (!material.length) throw Error("Repository missing");
   const schema = {
     type: "object",
-    properties: { description: { type: "string" } },
-    required: ["description"],
+    properties: {
+      summary: { type: "string" },
+      description: { type: "string" },
+      kind: { type: "string" },
+    },
+    required: ["summary", "description", "kind"],
     additionalProperties: false,
   };
   const args = [
@@ -50,8 +56,17 @@ export async function describe(app: ApplicationApi, key: string) {
       }
     });
   });
-  app.db.put("description", hash, { key, hash, value });
-  return { key, hash, value };
+  const output = value as {
+    structured_output?: { summary: string; description: string; kind: string };
+  };
+  if (!output.structured_output)
+    throw Error("Description did not return structured output");
+  const about = {
+    ...output.structured_output,
+    generatedAt: new Date().toISOString(),
+  };
+  app.db.put("description", hash, { key, hash, value, about });
+  return { key, hash, value, about };
 }
 export async function classify(app: ApplicationApi, id: string) {
   if (!process.env.TYPESAFE_API_KEY) return { status: "disabled" };
@@ -107,7 +122,30 @@ export async function classify(app: ApplicationApi, id: string) {
     signal: AbortSignal.timeout(30000),
   });
   if (!response.ok) throw Error(`Classification HTTP ${response.status}`);
-  const value: unknown = await response.json();
+  const raw = (await response.json()) as Record<string, unknown>;
+  const answers = (raw.answers ?? raw) as Record<string, unknown>;
+  const recommendation = answers.recommendation;
+  const choice =
+    recommendation && typeof recommendation === "object"
+      ? (recommendation as Record<string, unknown>)
+      : {};
+  const value = Schema.decodeUnknownSync(JevClassification)({
+    recommendation:
+      typeof recommendation === "string"
+        ? recommendation
+        : (choice.value ?? choice.answer ?? choice.choice),
+    confidence: choice.confidence ?? raw.confidence ?? 0,
+    flags: Object.keys(questions).filter((k) => {
+      const a = answers[k];
+      return (
+        a === true ||
+        a === "yes" ||
+        (a &&
+          typeof a === "object" &&
+          (a as Record<string, unknown>).value === true)
+      );
+    }),
+  });
   app.db.put("classification", hash, { id, hash, value });
   return { id, hash, value };
 }

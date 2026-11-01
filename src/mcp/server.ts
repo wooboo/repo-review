@@ -1,3 +1,4 @@
+import { startJob, getJob } from "../server/jobs";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import {
@@ -5,8 +6,26 @@ import {
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { Schema } from "effect";
-import { ListInput, IdInput, ScanInput, Action } from "../domain/model";
-import { AgentRunInput, startRun, getRun, listRuns } from "../server/agents";
+import {
+  ListInput,
+  IdInput,
+  ScanInput,
+  Action,
+  PullRequestListInput,
+  CreatePullRequestInput,
+  MergePullRequestInput,
+  PlanActionsInput,
+  ActionListInput,
+  AgentListInput,
+} from "../domain/model";
+import {
+  AgentRunInput,
+  startRun,
+  getRun,
+  listRuns,
+  listAgents,
+  cancelRun,
+} from "../server/agents";
 import { withApp, type ApplicationApi } from "../server/application";
 const empty = Schema.Struct({});
 export const toolSchemas = {
@@ -18,32 +37,32 @@ export const toolSchemas = {
   search_branches: ListInput,
   get_branch: IdInput,
   list_worktrees: ListInput,
-  list_pull_requests: IdInput,
-  get_pull_request: Schema.Struct({
-    repo: Schema.String,
-    number: Schema.Number,
+  list_pull_requests: PullRequestListInput,
+  refresh_pull_requests: Schema.Struct({
+    repo: Schema.optional(Schema.String),
   }),
+  get_job: IdInput,
+  plan_actions: PlanActionsInput,
+  list_actions: ActionListInput,
+  list_agents: empty,
+  cancel_agent_run: IdInput,
+  comment_pull_request: Schema.Struct({
+    id: Schema.String,
+    body: Schema.String,
+  }),
+  get_pull_request: IdInput,
   plan_cleanup: ListInput,
   apply_actions: Schema.Struct({ ids: Schema.Array(Schema.String) }),
   delete_branch: Action,
-  create_pull_request: Schema.Struct({
-    repo: Schema.String,
-    head: Schema.String,
-    base: Schema.String,
-    title: Schema.String,
-    body: Schema.optional(Schema.String),
-  }),
-  merge_pull_request: Schema.Struct({
-    repo: Schema.String,
-    number: Schema.Number,
-  }),
-  close_pull_request: Schema.Struct({
-    repo: Schema.String,
-    number: Schema.Number,
-  }),
+  create_pull_request: CreatePullRequestInput,
+  merge_pull_request: MergePullRequestInput,
+  close_pull_request: IdInput,
   start_agent_run: AgentRunInput,
-  get_agent_run: IdInput,
-  list_agent_runs: empty,
+  get_agent_run: Schema.Struct({
+    id: Schema.String,
+    cursor: Schema.optional(Schema.Number),
+  }),
+  list_agent_runs: AgentListInput,
   get_settings: empty,
   update_scan_roots: Schema.Struct({
     host: Schema.String,
@@ -98,50 +117,61 @@ export async function callTool(
       return app.getBranch(decode(IdInput).id);
     case "list_worktrees":
       return app.listWorktrees(decode(ListInput));
+    case "get_job":
+      return getJob(app, decode(IdInput).id);
+    case "plan_actions":
+      return startJob(app, "plan-actions", () =>
+        app.planActions(decode(PlanActionsInput)),
+      );
     case "plan_cleanup":
-      return app.planCleanup(decode(ListInput));
+      return startJob(app, "plan-actions", () =>
+        app.planActions({ kind: "delete-branch", filter: decode(ListInput) }),
+      );
     case "apply_actions":
-      return app.applyActions(decode(toolSchemas.apply_actions).ids);
+      return startJob(app, "apply-actions", () =>
+        app.applyActions(decode(toolSchemas.apply_actions).ids),
+      );
+    case "list_actions":
+      return app.listActions(decode(ActionListInput));
     case "delete_branch": {
-      const action = decode(Action);
-      if (
-        !action.archive &&
-        ![
-          "merged",
-          "patch-merged",
-          "squash-merged",
-          "content-in-base",
-        ].includes(action.state)
-      )
-        throw Error("Archive required for unmerged branch");
-      return app.runAction(action, false);
+      const v = decode(Action);
+      return startJob(app, "plan-actions", () =>
+        app.planActions({
+          kind: v.archive ? "archive-and-delete" : "delete-branch",
+          targets: [
+            { host: v.host, repo: v.repo, branch: v.branch, remote: v.remote },
+          ],
+        }),
+      );
     }
     case "list_pull_requests":
-      return app.forge().listPullRequests(decode(IdInput).id);
-    case "get_pull_request": {
-      const v = decode(toolSchemas.get_pull_request);
-      return app.forge().detail(v.repo, v.number);
-    }
-    case "create_pull_request": {
-      const v = decode(toolSchemas.create_pull_request);
-      return app.forge().operation(v.repo, "create", { ...v });
-    }
+      return app.listPullRequests(decode(PullRequestListInput));
+    case "get_pull_request":
+      return app.getPullRequest(decode(IdInput).id);
+    case "refresh_pull_requests":
+      return startJob(app, "refresh-pull-requests", () =>
+        app.refreshPullRequests(decode(toolSchemas.refresh_pull_requests).repo),
+      );
+    case "create_pull_request":
+      return app.createPullRequest(decode(CreatePullRequestInput));
     case "merge_pull_request":
-    case "close_pull_request": {
-      const v = decode(toolSchemas.merge_pull_request);
-      return app
-        .forge()
-        .operation(v.repo, name === "merge_pull_request" ? "merge" : "close", {
-          number: v.number,
-        });
-    }
+      return app.mergePullRequest(decode(MergePullRequestInput));
+    case "close_pull_request":
+      return app.closePullRequest(decode(IdInput).id);
+    case "comment_pull_request":
+      return app.commentPullRequest(decode(toolSchemas.comment_pull_request));
+    case "list_agents":
+      return listAgents(app);
+    case "cancel_agent_run":
+      return cancelRun(app, decode(IdInput).id);
     case "start_agent_run":
       return startRun(app, decode(AgentRunInput));
-    case "get_agent_run":
-      return getRun(app, decode(IdInput).id);
+    case "get_agent_run": {
+      const v = decode(toolSchemas.get_agent_run);
+      return getRun(app, v.id, v.cursor);
+    }
     case "list_agent_runs":
-      decode(empty);
-      return listRuns(app);
+      return listRuns(app, decode(AgentListInput));
     default:
       throw Error("Unknown tool");
   }

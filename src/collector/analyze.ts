@@ -1,5 +1,5 @@
 import { existsSync, lstatSync } from "node:fs";
-import { join, basename } from "node:path";
+import { join, basename, extname } from "node:path";
 import type { Branch, Clone, Thread, Worktree } from "../domain/model";
 import { normalizeUrl, safeUrl } from "../domain/logic";
 import { git, out, run, operations, worktreeRows } from "./git";
@@ -46,6 +46,15 @@ export function worktree(
     if (files.length < 300) files.push({ path: name, xy, mtime });
   }
   return {
+    newestChangeAt:
+      files
+        .map((f) => f.mtime)
+        .filter((d): d is string => !!d)
+        .sort()
+        .at(-1) ?? null,
+    lastGitActivityAt: exists
+      ? out(path, "log", "-1", "--format=%cI") || null
+      : null,
     path,
     head: row.HEAD ?? "",
     branch: row.branch?.replace("refs/heads/", "") ?? null,
@@ -122,7 +131,38 @@ export function analyzeBranch(
     const [n, s] = l.split("\0");
     if (n?.endsWith("/" + name)) onRemotes[n.slice(0, -name.length - 1)] = s;
   }
+  const own = base
+    ? out(path, "log", "--format=%aI", `${base}..${sha}`)
+        .split("\n")
+        .filter(Boolean)
+    : [];
+  const cherryLines = base ? out(path, "cherry", base, sha).split("\n") : [];
+  const upstreamCounts = upstream
+    ? out(path, "rev-list", "--left-right", "--count", `${sha}...${upstream}`)
+        .split(/\s+/)
+        .map(Number)
+    : [];
   const a: { -readonly [K in keyof Branch]: Branch[K] } = {
+    authorDate: out(path, "log", "-1", "--format=%aI", ref),
+    mergeBaseDate: mergeBase
+      ? out(path, "log", "-1", "--format=%cI", mergeBase)
+      : null,
+    baseMovedAt:
+      mergeBase && base
+        ? out(
+            path,
+            "log",
+            "--reverse",
+            "--format=%cI",
+            `${mergeBase}..${base}`,
+          ).split("\n")[0] || null
+        : null,
+    firstOwnCommitAt: own.at(-1) ?? null,
+    lastOwnCommitAt: own[0] ?? null,
+    cherryApplied: cherryLines.filter((l) => l.startsWith("-")).length,
+    cherryUnapplied: cherryLines.filter((l) => l.startsWith("+")).length,
+    upstreamAhead: upstreamCounts[0] || 0,
+    upstreamBehind: upstreamCounts[1] || 0,
     name,
     sha,
     date,
@@ -269,7 +309,7 @@ export function collectRepo(
         "--quiet",
         `refs/remotes/${name}/HEAD`,
       ).replace(`refs/remotes/${name}/`, "");
-      if (!defaultBranch && fetch && f?.code === 0)
+      if (!defaultBranch)
         defaultBranch =
           out(sample, "ls-remote", "--symref", name, "HEAD").match(
             /ref: refs\/heads\/(.+)\tHEAD/,
@@ -280,6 +320,13 @@ export function collectRepo(
         pushurl,
         key: normalizeUrl(url),
         defaultBranch,
+        lastFetchAt: (() => {
+          try {
+            return lstatSync(join(commonDir, "FETCH_HEAD")).mtime.toISOString();
+          } catch {
+            return null;
+          }
+        })(),
         fetchError: f?.code ? f.error.slice(-400) : null,
       };
     });
@@ -325,7 +372,23 @@ export function collectRepo(
     "\n",
   );
   const readme = top.find((n) => n.toLowerCase().startsWith("readme"));
+  const extensions: Record<string, number> = {};
+  for (const file of out(
+    sample,
+    "ls-tree",
+    "-r",
+    "--name-only",
+    primary || "HEAD",
+  ).split("\n")) {
+    const e = extname(file);
+    if (e) extensions[e] = (extensions[e] ?? 0) + 1;
+  }
   const about = JSON.stringify({
+    extensions,
+    claude: out(sample, "show", `${primary || "HEAD"}:CLAUDE.md`).slice(
+      0,
+      2500,
+    ),
     top,
     readme: readme
       ? out(sample, "show", `${primary || "HEAD"}:${readme}`).slice(0, 6000)
@@ -343,6 +406,11 @@ export function collectRepo(
   });
   return {
     path,
+    firstCommitAt:
+      out(sample, "log", "--reverse", "--format=%aI", primary || "HEAD").split(
+        "\n",
+      )[0] ?? "",
+    lastCommitAt: out(sample, "log", "-1", "--format=%cI", primary || "HEAD"),
     commonDir,
     name: basename(path),
     key: origin?.key || `local/${basename(path)}@${roots[0] ?? "empty"}`,

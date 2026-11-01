@@ -16,6 +16,7 @@ import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as WorktreesRouteImport } from './routes/worktrees'
 import { Route as AgentsIndexRouteImport } from './routes/agents.index'
 import { Route as AgentsRunRouteImport } from './routes/agents.$run'
+import { Route as ApiEventsRouteImport } from './routes/api/events'
 import { Route as BranchesIndexRouteImport } from './routes/branches.index'
 import { Route as BranchesIdRouteImport } from './routes/branches.$id'
 import { Route as PrsIndexRouteImport } from './routes/prs.index'
@@ -58,6 +59,11 @@ const AgentsRunRoute = AgentsRunRouteImport.update({
   path: '/agents/$run',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiEventsRoute = ApiEventsRouteImport.update({
+  id: '/api/events',
+  path: '/api/events',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const BranchesIndexRoute = BranchesIndexRouteImport.update({
   id: '/branches/',
   path: '/branches/',
@@ -96,6 +102,7 @@ export interface FileRoutesByFullPath {
   '/settings': typeof SettingsRoute
   '/worktrees': typeof WorktreesRoute
   '/agents/$run': typeof AgentsRunRoute
+  '/api/events': typeof ApiEventsRoute
   '/branches/$id': typeof BranchesIdRoute
   '/prs/$pr': typeof PrsPrRoute
   '/repos/$repo': typeof ReposRepoRoute
@@ -111,6 +118,7 @@ export interface FileRoutesByTo {
   '/settings': typeof SettingsRoute
   '/worktrees': typeof WorktreesRoute
   '/agents/$run': typeof AgentsRunRoute
+  '/api/events': typeof ApiEventsRoute
   '/branches/$id': typeof BranchesIdRoute
   '/prs/$pr': typeof PrsPrRoute
   '/repos/$repo': typeof ReposRepoRoute
@@ -127,6 +135,7 @@ export interface FileRoutesById {
   '/settings': typeof SettingsRoute
   '/worktrees': typeof WorktreesRoute
   '/agents/$run': typeof AgentsRunRoute
+  '/api/events': typeof ApiEventsRoute
   '/branches/$id': typeof BranchesIdRoute
   '/prs/$pr': typeof PrsPrRoute
   '/repos/$repo': typeof ReposRepoRoute
@@ -144,6 +153,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/worktrees'
     | '/agents/$run'
+    | '/api/events'
     | '/branches/$id'
     | '/prs/$pr'
     | '/repos/$repo'
@@ -159,6 +169,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/worktrees'
     | '/agents/$run'
+    | '/api/events'
     | '/branches/$id'
     | '/prs/$pr'
     | '/repos/$repo'
@@ -174,6 +185,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/worktrees'
     | '/agents/$run'
+    | '/api/events'
     | '/branches/$id'
     | '/prs/$pr'
     | '/repos/$repo'
@@ -190,6 +202,7 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRoute
   WorktreesRoute: typeof WorktreesRoute
   AgentsRunRoute: typeof AgentsRunRoute
+  ApiEventsRoute: typeof ApiEventsRoute
   BranchesIdRoute: typeof BranchesIdRoute
   PrsPrRoute: typeof PrsPrRoute
   ReposRepoRoute: typeof ReposRepoRoute
@@ -250,6 +263,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AgentsRunRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/events': {
+      id: '/api/events'
+      path: '/api/events'
+      fullPath: '/api/events'
+      preLoaderRoute: typeof ApiEventsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/branches/': {
       id: '/branches/'
       path: '/branches'
@@ -302,6 +322,7 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRoute,
   WorktreesRoute: WorktreesRoute,
   AgentsRunRoute: AgentsRunRoute,
+  ApiEventsRoute: ApiEventsRoute,
   BranchesIdRoute: BranchesIdRoute,
   PrsPrRoute: PrsPrRoute,
   ReposRepoRoute: ReposRepoRoute,

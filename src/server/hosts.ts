@@ -1,9 +1,10 @@
+import { HostError } from "./errors";
 import { spawn } from "node:child_process";
 import type { Host } from "../domain/model";
 import collector from "../collector/generated/main";
 import worker from "../collector/generated/worker";
 const shell = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
-export async function runHost(
+async function runHostImpl(
   host: Host,
   kind: "scan" | "worker",
   args: string[],
@@ -70,3 +71,8 @@ export async function runHost(
     p.stdin.end(kind === "scan" ? collector : worker);
   });
 }
+
+export const runHost = (...args: Parameters<typeof runHostImpl>) =>
+  runHostImpl(...args).catch((e: unknown) => {
+    throw new HostError({ message: String(e) });
+  });
