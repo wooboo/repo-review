@@ -202,3 +202,70 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Forge Markdown (PR bodies, reviews, comments): semantic tokens only; wide content scrolls in place. */
+@layer components {
+  .markdown {
+    @apply min-w-0 text-sm leading-relaxed break-words [overflow-wrap:anywhere];
+  }
+  .markdown > * + * {
+    @apply mt-3;
+  }
+  .markdown :is(h1, h2, h3, h4, h5, h6) {
+    @apply mt-4 font-semibold tracking-tight first:mt-0;
+  }
+  .markdown h1 {
+    @apply text-lg;
+  }
+  .markdown h2 {
+    @apply text-base;
+  }
+  .markdown :is(h3, h4, h5, h6) {
+    @apply text-sm;
+  }
+  .markdown a {
+    @apply text-primary underline underline-offset-4;
+  }
+  .markdown :is(ul, ol) {
+    @apply flex flex-col gap-1 pl-5;
+  }
+  .markdown ul {
+    @apply list-disc;
+  }
+  .markdown ol {
+    @apply list-decimal;
+  }
+  .markdown li:has(> input[type="checkbox"]) {
+    @apply -ml-5 list-none;
+  }
+  .markdown input[type="checkbox"] {
+    @apply mr-1.5 align-middle accent-primary;
+  }
+  .markdown blockquote {
+    @apply border-l-2 pl-3 text-muted-foreground;
+  }
+  .markdown hr {
+    @apply border-t;
+  }
+  .markdown code {
+    @apply rounded bg-muted px-1 py-0.5 font-mono text-[0.85em];
+  }
+  .markdown pre {
+    @apply max-w-full overflow-x-auto rounded-lg bg-muted p-3 font-mono text-xs leading-normal [overflow-wrap:normal] break-normal whitespace-pre;
+  }
+  .markdown pre code {
+    @apply bg-transparent p-0 text-[inherit];
+  }
+  .markdown .md-table {
+    @apply max-w-full overflow-x-auto;
+  }
+  .markdown table {
+    @apply w-max min-w-full border-collapse text-xs [overflow-wrap:normal];
+  }
+  .markdown :is(th, td) {
+    @apply border px-2 py-1 text-left align-top;
+  }
+  .markdown th {
+    @apply bg-muted font-semibold;
+  }
+}

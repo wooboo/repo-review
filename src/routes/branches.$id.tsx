@@ -1,26 +1,29 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { ArchiveIcon, GitPullRequestCreateIcon, Loader2Icon, Trash2Icon } from "lucide-react";
+import { ArchiveIcon, EraserIcon, ExternalLinkIcon, FastForwardIcon, GitPullRequestCreateIcon, Loader2Icon, Trash2Icon, UndoIcon, UploadIcon } from "lucide-react";
 import { useState } from "react";
-import { ActionFlowSheet } from "@/components/action-flow";
-import { DivergenceBar, FlagChips, KV, Mono, Pill, PrStateBadge, RelativeTime, StateBadge, VerdictBadge } from "@/components/domain";
+import { useActionFlow } from "@/components/action-flow";
+import { DivergenceBar, FlagChips, KV, LandedBadge, Mono, Pill, PrStateBadge, RelativeTime, StateBadge, VerdictBadge } from "@/components/domain";
 import { FilterField, SwitchRow } from "@/components/filters/field";
 import { NewRunButton } from "@/components/new-run";
 import { Card, PageHeader, Section } from "@/components/page-header";
 import { leadClone, RowList, usePrsByBranch, WorktreeCard } from "@/components/rows";
-import { EmptyState, ErrorState, PageSkeleton } from "@/components/states";
+import { EmptyState, ErrorState, ListSkeleton, PageSkeleton } from "@/components/states";
+import { HistoryRow } from "@/components/provenance";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { parseBranchId } from "@/lib/api/adapters";
+import { parseBranchId } from "@/lib/api/ids";
 import { createPullRequest } from "@/lib/api/client";
-import type { BranchClone, BranchGroup, Clone, PlanInput, Thread, WorktreeItem } from "@/lib/api/types";
-import { parseCommit, parseShortstat, repoName, shortSha, stripRemote } from "@/lib/format";
+import type { BranchClone, BranchGroup, Clone, LandedVia, PlanInput, Thread, WorktreeItem } from "@/lib/api/types";
+import { parseShortstat, repoName, shortSha, stripRemote } from "@/lib/format";
+import { branchLanding, commitsToReview, commitUrl } from "@/lib/provenance";
 import { q } from "@/lib/queries";
 import { prefetch, title } from "@/lib/route-helpers";
 import { cn } from "@/lib/utils";
+import { canFastForward, canPrune, canPush, canSwitchToBase } from "@/lib/worktrees";
 import { m } from "@/messages";
 
 export const Route = createFileRoute("/branches/$id")({
@@ -39,7 +42,8 @@ function BranchPage() {
   const repo = useQuery({ ...q.repo(ref?.repo ?? ""), enabled: !!ref });
   const settings = useQuery(q.settings());
   const prs = usePrsByBranch(ref?.repo);
-  const [plan, setPlan] = useState<PlanInput | null>(null);
+  const flow = useActionFlow();
+  const setPlan = (p: PlanInput) => flow.start(p);
   const [createPr, setCreatePr] = useState(false);
   const header = (b?: BranchGroup) => (
     <PageHeader
@@ -52,14 +56,28 @@ function BranchPage() {
   if (branch.isPending) return <>{header()}<PageSkeleton /></>;
   if (branch.error) return <>{header()}<ErrorState error={branch.error} onRetry={() => void branch.refetch()} /></>;
   const b = branch.data;
-  if (!b) return <>{header()}<EmptyState>{m.branches.notFound}</EmptyState></>;
+  if (!b) return <>{header()}{ref ? <GoneBranch repo={ref.repo} name={ref.name} /> : <EmptyState>{m.branches.notFound}</EmptyState>}</>;
   const pr = prs.get(b.id);
   const hasForge = settings.data?.forges.some((f) => b.repo.startsWith(f.host + "/")) ?? false;
   const clones = repo.data?.clones ?? [];
   const cloneOf = (c: BranchClone) => clones.find((x) => x.host === c.host && x.path === c.path);
-  const worktrees = b.clones.flatMap((c) => (cloneOf(c)?.worktrees ?? []).filter((w) => w.branch === b.name).map((w): WorktreeItem => ({ ...w, id: c.host + ":" + w.path, name: w.path, host: c.host, repo: b.repo })));
+  const worktrees = b.clones.flatMap((c) =>
+    (cloneOf(c)?.worktrees ?? []).filter((w) => w.branch === b.name).map((w) => ({ clonePath: c.path, item: { ...w, id: c.host + ":" + w.path, name: w.path, host: c.host, repo: b.repo } satisfies WorktreeItem })),
+  );
   const threads = b.clones.flatMap((c) => threadsFor(cloneOf(c), b.name).map((t) => ({ host: c.host, ...t })));
-  const operations = worktrees.some((w) => w.operations.length > 0);
+  const operations = worktrees.some((w) => w.item.operations.length > 0);
+  const landed = branchLanding(b);
+  const pushable = b.clones.filter(canPush);
+  const worktreeAction = ({ clonePath, item: w }: (typeof worktrees)[number]) =>
+    canSwitchToBase(w, b.verdict) ? (
+      <Button variant="outline" className="h-11 md:h-8" onClick={() => setPlan({ kind: "switch-to-base", targets: [{ host: w.host, repo: clonePath, branch: b.name, worktree: w.path }] })}>
+        <UndoIcon />{m.worktrees.switchToBase}
+      </Button>
+    ) : canPrune(w) ? (
+      <Button variant="outline" className="h-11 md:h-8" onClick={() => setPlan({ kind: "prune-worktree", targets: [{ host: w.host, repo: clonePath, worktree: w.path }] })}>
+        <EraserIcon />{m.worktrees.prune}
+      </Button>
+    ) : undefined;
 
   return (
     <>
@@ -68,7 +86,7 @@ function BranchPage() {
         <div className="flex flex-col gap-3">
           <p className="text-sm text-muted-foreground">{m.verdictHelp[b.verdict]}</p>
           <span className="flex flex-wrap gap-1">
-            {pr && <Link to="/prs/$pr" params={{ pr: pr.id }}><PrStateBadge pr={pr} /></Link>}
+            {pr && pr.id !== landed?.pullRequestId && <Link to="/prs/$pr" params={{ pr: pr.id }}><PrStateBadge pr={pr} /></Link>}
             <FlagChips branch={b} extra={[...(operations ? [{ key: "operation" as const, t: "bad" as const }] : []), ...(threads.length ? [{ key: "threads" as const, t: "warn" as const }] : [])]} />
           </span>
           <div className="flex flex-wrap gap-2">
@@ -82,7 +100,12 @@ function BranchPage() {
                 <ArchiveIcon />{m.branches.archiveDelete}
               </Button>
             )}
-            {hasForge && !pr && b.verdict !== "base" && b.verdict !== "delete" && (
+            {pushable.length > 0 && (
+              <Button variant="outline" className="h-11 md:h-9" onClick={() => setPlan({ kind: "push-branch", targets: pushable.map((c) => ({ host: c.host, repo: c.path, branch: b.name })) })}>
+                <UploadIcon />{m.branches.push}
+              </Button>
+            )}
+            {hasForge && !pr && !landed && b.verdict !== "base" && b.verdict !== "delete" && (
               <Button variant="outline" className="h-11 md:h-9" onClick={() => setCreatePr(true)}>
                 <GitPullRequestCreateIcon />{m.branches.createPr}
               </Button>
@@ -91,15 +114,20 @@ function BranchPage() {
           </div>
         </div>
 
+        {landed && <LandedSection repo={b.repo} landed={landed} />}
+
         <Section title={m.branches.perClone} id="clones">
           <div className="grid gap-3 xl:grid-cols-2">
-            {b.clones.map((c) => <CloneCard key={c.host + c.path} c={c} max={Math.max(10, ...b.clones.flatMap((x) => [x.ahead, x.behind]))} />)}
+            {b.clones.map((c) => (
+              <CloneCard key={c.host + c.path} c={c} showLanded={!landed && b.verdict !== "base"} base={b.verdict === "base"} max={Math.max(10, ...b.clones.flatMap((x) => [x.ahead, x.behind]))}
+                onFastForward={canFastForward(c) ? () => setPlan({ kind: "fast-forward-base", targets: [{ host: c.host, repo: c.path, branch: c.name }] }) : undefined} />
+            ))}
           </div>
         </Section>
 
         {worktrees.length > 0 && (
           <Section title={m.branches.worktrees} id="worktrees">
-            <div className="flex flex-col gap-2">{worktrees.map((w) => <WorktreeCard key={w.id} worktree={w} showRepo={false} />)}</div>
+            <div className="flex flex-col gap-2">{worktrees.map((w) => <WorktreeCard key={w.item.id} worktree={w.item} showRepo={false} actions={worktreeAction(w)} />)}</div>
           </Section>
         )}
 
@@ -116,9 +144,22 @@ function BranchPage() {
           </Section>
         )}
       </div>
-      <ActionFlowSheet request={plan} onClose={() => setPlan(null)} />
+      {flow.sheet}
       {hasForge && <CreatePrSheet branch={b} open={createPr} onOpenChange={setCreatePr} />}
     </>
+  );
+}
+
+/** A branch the inventory no longer has: its history entries (where it was, where it landed), if any. */
+function GoneBranch({ repo, name }: { repo: string; name: string }) {
+  const history = useQuery(q.history({ repo, gone: true, page: 1, pageSize: 200 }));
+  const rows = (history.data?.items ?? []).filter((h) => h.branch === name);
+  if (history.isPending) return <ListSkeleton rows={2} />;
+  if (!rows.length) return <EmptyState>{m.branches.notFound}</EmptyState>;
+  return (
+    <Section title={m.branches.history} id="history">
+      <RowList>{rows.map((h) => <HistoryRow key={`${h.host}:${h.clonePath}@${h.sha}`} item={h} showRepo={false} />)}</RowList>
+    </Section>
   );
 }
 
@@ -128,8 +169,47 @@ function threadsFor(clone: Clone | undefined, branch: string): Thread[] {
   return clone.threads.filter((t) => t.branch === branch || (t.worktree && paths.has(t.worktree)));
 }
 
-function CloneCard({ c, max }: { c: BranchClone; max: number }) {
-  const commits = c.commits.map(parseCommit);
+/** "Landed via #12 (squash) as abc1234", with links to the PR and the merge commit. */
+function LandedSection({ repo, landed }: { repo: string; landed: LandedVia }) {
+  const method = m.provenance.method[landed.method];
+  const sha = landed.mergeCommitSha ?? landed.matchedSha;
+  const url = commitUrl(repo, sha);
+  return (
+    <Section title={m.provenance.title} id="landed">
+      <Card className="flex flex-col gap-2">
+        <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm">
+          <span>{m.provenance.landedViaPrefix}</span>
+          <Link to="/prs/$pr" params={{ pr: landed.pullRequestId }} className="font-medium underline-offset-4 hover:underline">#{landed.number}</Link>
+          {method && <span className="text-muted-foreground">({method})</span>}
+          {sha && (
+            <>
+              <span>{m.provenance.as}</span>
+              {url ? (
+                <a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-mono text-xs underline-offset-4 hover:underline">
+                  {shortSha(sha)}<ExternalLinkIcon className="size-3" aria-hidden="true" />
+                </a>
+              ) : <Mono>{shortSha(sha)}</Mono>}
+            </>
+          )}
+          <a href={landed.url} target="_blank" rel="noreferrer" aria-label={m.openExternal} title={m.openExternal} className="inline-flex size-11 items-center justify-center text-muted-foreground hover:text-foreground md:size-6">
+            <ExternalLinkIcon className="size-4" />
+          </a>
+        </p>
+        {landed.extraCommits > 0 && (
+          <p className="flex flex-col gap-1 text-sm">
+            <span><LandedBadge landed={landed} /></span>
+            <span className="text-muted-foreground">{m.provenance.onlyExtra(landed.number)}</span>
+          </p>
+        )}
+      </Card>
+    </Section>
+  );
+}
+
+function CloneCard({ c, max, showLanded, base, onFastForward }: { c: BranchClone; max: number; showLanded: boolean; base: boolean; onFastForward?: () => void }) {
+  // Base branches absorb every PR; their own commits are listed as they are.
+  const review = commitsToReview(base ? { ...c, landedVia: null } : c);
+  const commits = review.commits;
   const diff = parseShortstat(c.diffstat);
   const residual = parseShortstat(c.residual);
   const remotes = Object.entries(c.onRemotes);
@@ -161,7 +241,14 @@ function CloneCard({ c, max }: { c: BranchClone; max: number }) {
         ...(residual ? [[m.branches.residual, <DiffStat key="rs" s={residual} />] as [string, React.ReactNode]] : []),
         ...(c.squashCommit ? [[m.branches.squash, <Mono key="sq">{shortSha(c.squashCommit)}</Mono>] as [string, React.ReactNode]] : []),
         ...(c.containedIn.length ? [[m.branches.containedIn, <span key="ci" className="flex flex-wrap gap-1">{c.containedIn.map((r) => <Pill key={r}>{r}</Pill>)}</span>] as [string, React.ReactNode]] : []),
+        ...(showLanded && review.landed ? [[m.provenance.title, <Link key="lv" to="/prs/$pr" params={{ pr: review.landed.pullRequestId }}><LandedBadge landed={review.landed} /></Link>] as [string, React.ReactNode]] : []),
       ]} />
+      {onFastForward && c.base && (
+        <div className="flex flex-col items-start gap-2 rounded-lg bg-muted/50 p-2 text-sm">
+          <span>{m.repos.behindBase(c.name, c.base, c.behind)}</span>
+          <Button variant="outline" className="h-11 md:h-8" onClick={onFastForward}><FastForwardIcon />{m.branches.fastForward(c.base)}</Button>
+        </div>
+      )}
       {bases.length > 1 && (
         <div className="flex flex-col gap-1">
           <h3 className="text-xs font-semibold text-muted-foreground uppercase">{m.branches.vsBases}</h3>
@@ -176,21 +263,23 @@ function CloneCard({ c, max }: { c: BranchClone; max: number }) {
         </div>
       )}
       <div className="flex flex-col gap-1">
-        <h3 className="text-xs font-semibold text-muted-foreground uppercase">{m.branches.commits}</h3>
+        <h3 className="text-xs font-semibold text-muted-foreground uppercase">
+          {review.landed && review.landed.extraCommits > 0 ? m.provenance.after(review.landed.extraCommits, review.landed.number) : m.branches.commits}
+        </h3>
         {commits.length ? (
           <ul className="flex flex-col divide-y text-sm">
             {commits.map((k) => (
               <li key={k.sha} className="flex items-baseline gap-2 py-1.5">
-                <Mono className="shrink-0 text-muted-foreground">{k.sha}</Mono>
+                <Mono className="shrink-0 text-muted-foreground">{shortSha(k.sha)}</Mono>
                 <span className="min-w-0 flex-1 break-words">{k.subject}</span>
-                <RelativeTime iso={k.date} className="shrink-0 text-xs text-muted-foreground" />
+                {k.date && <RelativeTime iso={k.date} className="shrink-0 text-xs text-muted-foreground" />}
               </li>
             ))}
           </ul>
         ) : (
-          <p className="text-sm text-muted-foreground">{m.branches.noCommits}</p>
+          <p className="text-sm text-muted-foreground">{review.landed ? m.provenance.nothingExtra(review.landed.number) : m.branches.noCommits}</p>
         )}
-        {commits.length >= 25 && <p className="text-xs text-muted-foreground">{m.branches.commitsTruncated}</p>}
+        {!review.filtered && commits.length >= 25 && <p className="text-xs text-muted-foreground">{m.branches.commitsTruncated}</p>}
       </div>
     </Card>
   );

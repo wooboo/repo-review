@@ -59,7 +59,10 @@ export const repoListSearch = searchSchema(
   { q: "", host: "", sort: "attention" },
 );
 
-export const repoSearch = searchSchema({ tab: Schema.Literals(["overview", "branches", "worktrees", "prs"]) }, { tab: "overview" });
+export const repoSearch = searchSchema(
+  { tab: Schema.Literals(["overview", "branches", "worktrees", "prs", "landings"]), base: Text, page: Page },
+  { tab: "overview", base: "", page: 1 },
+);
 
 export const branchSearch = searchSchema(
   {
@@ -73,14 +76,18 @@ export const branchSearch = searchSchema(
     localOnly: Schema.Boolean,
     jev: JevFilter,
     sort: Schema.Literals(["date", "name"]),
+    view: Schema.Literals(["live", "gone"]),
     page: Page,
   },
-  { q: "", verdict: [], host: "", repo: "", state: "", stale: false, dirty: false, localOnly: false, jev: "", sort: "date", page: 1 },
+  { q: "", verdict: [], host: "", repo: "", state: "", stale: false, dirty: false, localOnly: false, jev: "", sort: "date", view: "live", page: 1 },
 );
 export const BRANCH_FILTER_KEYS = ["verdict", "host", "repo", "state", "stale", "dirty", "localOnly", "jev"] as const;
 
-export const worktreeSearch = searchSchema({ q: Text, host: Text, repo: Text, dirty: Schema.Boolean }, { q: "", host: "", repo: "", dirty: false });
-export const WORKTREE_FILTER_KEYS = ["host", "repo", "dirty"] as const;
+export const worktreeSearch = searchSchema(
+  { q: Text, host: Text, repo: Text, status: Schema.Literals(["", "changes", "missing", "clean"]) },
+  { q: "", host: "", repo: "", status: "" },
+);
+export const WORKTREE_FILTER_KEYS = ["host", "repo", "status"] as const;
 
 export const prListSearch = searchSchema(
   {
@@ -95,7 +102,7 @@ export const prListSearch = searchSchema(
 export const PR_FILTER_KEYS = ["state", "repo", "checks"] as const;
 
 export const prSearch = searchSchema(
-  { tab: Schema.Literals(["conversation", "files", "diff", "checks"]), wrap: Schema.Boolean },
+  { tab: Schema.Literals(["conversation", "commits", "files", "diff", "checks"]), wrap: Schema.Boolean },
   { tab: "conversation", wrap: true },
 );
 
@@ -106,6 +113,7 @@ export const agentListSearch = searchSchema(
 
 export type BranchSearch = ReturnType<typeof branchSearch.decode>;
 export type RepoListSearch = ReturnType<typeof repoListSearch.decode>;
+export type RepoSearch = ReturnType<typeof repoSearch.decode>;
 export type WorktreeSearch = ReturnType<typeof worktreeSearch.decode>;
 export type PrListSearch = ReturnType<typeof prListSearch.decode>;
 export type AgentListSearch = ReturnType<typeof agentListSearch.decode>;

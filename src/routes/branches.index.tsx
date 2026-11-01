@@ -5,13 +5,16 @@ import { Dot, verdictBg } from "@/components/domain";
 import { FilterField, SwitchRow } from "@/components/filters/field";
 import { FilterLayout, OptionSelect, Pagination, SearchInput } from "@/components/filters/controls";
 import { PageHeader } from "@/components/page-header";
+import { HistoryRow } from "@/components/provenance";
 import { BranchRow, divergenceMax, RowList, usePrsByBranch } from "@/components/rows";
 import { EmptyState, ErrorState, ListSkeleton } from "@/components/states";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { State } from "@/lib/api/types";
 import { repoName } from "@/lib/format";
 import { q } from "@/lib/queries";
+import { matchHistory } from "@/lib/provenance";
 import { title } from "@/lib/route-helpers";
 import { BRANCH_FILTER_KEYS, branchSearch, stripDefaults, validator, type BranchSearch } from "@/lib/search";
 import { cn } from "@/lib/utils";
@@ -26,7 +29,7 @@ export const Route = createFileRoute("/branches/")({
 });
 
 const PAGE_SIZE = 50;
-const STATES: State[] = ["unmerged", "merged", "patch-merged", "squash-merged", "content-in-base", "no-base", "base"];
+const STATES: State[] = ["unmerged", "pr-merged-changed", "pr-merged", "merged", "patch-merged", "squash-merged", "content-in-base", "no-base", "base"];
 const JEV = ["delete", "archive", "keep", "finish_and_merge"] as const;
 
 function Branches() {
@@ -38,6 +41,7 @@ function Branches() {
   );
   const dashboard = useQuery(q.dashboard());
   const jevEnabled = dashboard.data?.jevEnabled ?? false;
+  const gone = search.view === "gone";
   const input = {
     text: search.q || undefined,
     verdicts: search.verdict,
@@ -51,27 +55,56 @@ function Branches() {
     page: search.page,
     pageSize: PAGE_SIZE,
   };
-  const branches = useQuery({ ...q.branches(input), placeholderData: keepPreviousData });
+  const branches = useQuery({ ...q.branches(input), placeholderData: keepPreviousData, enabled: !gone });
+  // The history list has no text filter; search runs on the loaded page.
+  const history = useQuery({ ...q.history({ repo: search.repo || undefined, gone: true, page: search.page, pageSize: PAGE_SIZE }), placeholderData: keepPreviousData, enabled: gone });
   const prs = usePrsByBranch();
-  // TODO(contract-v2): pass `jev` to the server once ListInput supports it; filtered on this page meanwhile.
+  // ListInput has no `jev` filter, so it is applied to the loaded page (kept until the server takes it).
   const items = useMemo(() => (branches.data?.items ?? []).filter((b) => !search.jev || b.jev?.recommendation === search.jev), [branches.data, search.jev]);
+  const goneItems = useMemo(() => (history.data?.items ?? []).filter((h) => matchHistory(h, search.q)), [history.data, search.q]);
   const max = useMemo(() => divergenceMax(items), [items]);
-  const activeCount = branchSearch.activeCount(search, BRANCH_FILTER_KEYS);
-  const reset = () => update(Object.fromEntries(BRANCH_FILTER_KEYS.map((k) => [k, branchSearch.defaults[k]])) as Partial<BranchSearch>);
+  const filterKeys = gone ? (["repo"] as const) : BRANCH_FILTER_KEYS;
+  const activeCount = branchSearch.activeCount(search, filterKeys);
+  const reset = () => update(Object.fromEntries(filterKeys.map((k) => [k, branchSearch.defaults[k]])) as Partial<BranchSearch>);
+  const total = gone ? history.data?.total : branches.data?.total;
 
   return (
     <>
-      <PageHeader title={m.branches.title} subtitle={branches.data ? m.results(branches.data.total) : undefined} />
+      <PageHeader title={m.branches.title} subtitle={total !== undefined ? m.results(total) : undefined} />
+      <Tabs value={search.view} onValueChange={(v) => update({ view: v === "gone" ? "gone" : "live" })} className="mb-3">
+        <TabsList className="h-11 w-full md:h-9 md:w-auto">
+          <TabsTrigger value="live" className="px-4">{m.branches.view.live}</TabsTrigger>
+          <TabsTrigger value="gone" className="px-4">{m.branches.view.gone}</TabsTrigger>
+        </TabsList>
+      </Tabs>
       <FilterLayout
         activeCount={activeCount}
         onReset={reset}
         toolbar={<>
           <SearchInput value={search.q} onChange={(v) => update({ q: v }, true)} placeholder={m.branches.searchPlaceholder} />
-          <OptionSelect className="w-auto" label={m.branches.sortLabel} value={search.sort} onChange={(v) => update({ sort: v || "date" })}
-            options={(["date", "name"] as const).map((s) => ({ value: s, label: m.branches.sort[s] }))} />
+          {!gone && (
+            <OptionSelect className="w-auto" label={m.branches.sortLabel} value={search.sort} onChange={(v) => update({ sort: v || "date" })}
+              options={(["date", "name"] as const).map((s) => ({ value: s, label: m.branches.sort[s] }))} />
+          )}
         </>}
-        panel={(p) => <Filters idPrefix={p} search={search} update={update} jevEnabled={jevEnabled} />}
+        panel={(p) => <Filters idPrefix={p} search={search} update={update} jevEnabled={jevEnabled} gone={gone} />}
       >
+        {gone ? (
+          history.error ? (
+            <ErrorState error={history.error} onRetry={() => void history.refetch()} />
+          ) : !history.data ? (
+            <ListSkeleton />
+          ) : !goneItems.length ? (
+            <EmptyState>{search.q || search.repo ? m.branches.goneNoMatch : m.branches.goneEmpty}</EmptyState>
+          ) : (
+            <>
+              <RowList className={cn(history.isPlaceholderData && "opacity-60 transition-opacity")}>
+                {goneItems.map((h) => <HistoryRow key={`${h.host}:${h.clonePath}#${h.branch}@${h.sha}`} item={h} />)}
+              </RowList>
+              <Pagination page={search.page} total={history.data.total} pageSize={PAGE_SIZE} onPage={(page) => update({ page })} />
+            </>
+          )
+        ) : <>
         {search.verdict.length > 0 && (
           <div className="flex flex-wrap gap-1 lg:hidden">
             {search.verdict.map((v) => (
@@ -96,14 +129,22 @@ function Branches() {
             <Pagination page={search.page} total={branches.data.total} pageSize={PAGE_SIZE} onPage={(page) => update({ page })} />
           </>
         )}
+        </>}
       </FilterLayout>
     </>
   );
 }
 
-function Filters({ idPrefix: p, search, update, jevEnabled }: { idPrefix: string; search: BranchSearch; update: (patch: Partial<BranchSearch>) => void; jevEnabled: boolean }) {
+function Filters({ idPrefix: p, search, update, jevEnabled, gone }: { idPrefix: string; search: BranchSearch; update: (patch: Partial<BranchSearch>) => void; jevEnabled: boolean; gone: boolean }) {
   const settings = useQuery(q.settings());
   const repos = useQuery(q.repos({ pageSize: 200 }));
+  const repo = (
+    <FilterField label={m.branches.repo} labelFor={p + "repo"}>
+      <OptionSelect id={p + "repo"} value={search.repo} onChange={(repo) => update({ repo })} anyLabel={m.branches.allRepos}
+        options={(repos.data?.items ?? []).map((r) => ({ value: r.key, label: repoName(r.key) })).sort((a, b) => a.label.localeCompare(b.label))} />
+    </FilterField>
+  );
+  if (gone) return repo;
   return (
     <>
       <FilterField label={m.branches.verdict}>
@@ -117,10 +158,7 @@ function Filters({ idPrefix: p, search, update, jevEnabled }: { idPrefix: string
           ))}
         </ToggleGroup>
       </FilterField>
-      <FilterField label={m.branches.repo} labelFor={p + "repo"}>
-        <OptionSelect id={p + "repo"} value={search.repo} onChange={(repo) => update({ repo })} anyLabel={m.branches.allRepos}
-          options={(repos.data?.items ?? []).map((r) => ({ value: r.key, label: repoName(r.key) })).sort((a, b) => a.label.localeCompare(b.label))} />
-      </FilterField>
+      {repo}
       <FilterField label={m.branches.host} labelFor={p + "host"}>
         <OptionSelect id={p + "host"} value={search.host} onChange={(host) => update({ host })} anyLabel={m.branches.allHosts}
           options={(settings.data?.hosts ?? []).map((h) => ({ value: h.id, label: h.id }))} />

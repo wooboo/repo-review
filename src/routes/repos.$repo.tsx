@@ -1,21 +1,31 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { ChevronDownIcon, ExternalLinkIcon } from "lucide-react";
-import { useMemo } from "react";
+import { ChevronDownIcon, EraserIcon, ExternalLinkIcon, FastForwardIcon, PencilIcon, UndoIcon } from "lucide-react";
+import { useMemo, useState } from "react";
+import { useActionFlow } from "@/components/action-flow";
+import { FilterField } from "@/components/filters/field";
+import { OptionSelect, Pagination } from "@/components/filters/controls";
+import { LandingRow } from "@/components/provenance";
+import { ScrollTabsList } from "@/components/scroll-tabs";
+import { SyncPrsButton } from "@/components/sync-prs";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Dot, KV, Mono, Pill, RelativeTime, verdictBg } from "@/components/domain";
 import { NewRunButton } from "@/components/new-run";
 import { Card, PageHeader, Section } from "@/components/page-header";
 import { BranchRow, divergenceMax, PrRow, RowList, usePrsByBranch, WorktreeCard } from "@/components/rows";
 import { EmptyState, ErrorState, ListSkeleton, PageSkeleton } from "@/components/states";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { Clone, RepositoryDetail, WorktreeItem } from "@/lib/api/types";
-import { parseStash, readmeSummary, repoName, repoOwner, shortSha } from "@/lib/format";
+import { Tabs, TabsContent, TabsTrigger } from "@/components/ui/tabs";
+import type { ActionTarget, Clone, PlanInput, RepositoryDetail, WorktreeItem } from "@/lib/api/types";
+import { parseStash, readmeSummary, repoName, repoOwner, shortSha, stripRemote } from "@/lib/format";
 import { q } from "@/lib/queries";
 import { prefetch, title } from "@/lib/route-helpers";
-import { repoSearch, stripDefaults, validator } from "@/lib/search";
+import { repoSearch, stripDefaults, validator, type RepoSearch } from "@/lib/search";
 import { cn } from "@/lib/utils";
 import { divergingShas, groupByVerdict } from "@/lib/verdicts";
+import { canFastForward, canPrune, canSwitchToBase, hasChanges, isMissing } from "@/lib/worktrees";
 import { m } from "@/messages";
 
 export const Route = createFileRoute("/repos/$repo")({
@@ -26,12 +36,15 @@ export const Route = createFileRoute("/repos/$repo")({
   component: RepoPage,
 });
 
-const TABS = ["overview", "branches", "worktrees", "prs"] as const;
+const TABS = ["overview", "branches", "worktrees", "prs", "landings"] as const;
+const LANDINGS_PAGE = 30;
 
 function RepoPage(): React.ReactNode {
   const { repo: key } = Route.useParams();
-  const { tab } = Route.useSearch();
+  const search = Route.useSearch();
+  const { tab } = search;
   const navigate = useNavigate({ from: Route.fullPath });
+  const flow = useActionFlow();
   const repo = useQuery(q.repo(key));
   const settings = useQuery(q.settings());
   const hasForge = settings.data?.forges.some((f) => key.startsWith(f.host + "/")) ?? false;
@@ -52,28 +65,34 @@ function RepoPage(): React.ReactNode {
     <>
       {header}
       <About repo={r} />
-      <Tabs value={tab} onValueChange={(v) => { const t = TABS.find((x) => x === v); if (t) void navigate({ search: (p) => ({ ...p, tab: t }), replace: true }); }} className="mt-4 gap-4">
-        <TabsList className="h-11 w-full md:h-9 md:w-auto">
+      <Tabs value={tab === "prs" && !hasForge ? "overview" : tab} onValueChange={(v) => { const t = TABS.find((x) => x === v); if (t) void navigate({ search: (p) => ({ ...p, tab: t, page: 1 }), replace: true }); }} className="mt-4 gap-4">
+        <ScrollTabsList>
           <TabsTrigger value="overview" className="px-2 md:px-3">{m.repos.tabs.overview}</TabsTrigger>
           <TabsTrigger value="branches" className="px-2 md:px-3">{m.repos.tabs.branches} <Count n={r.branches.length} /></TabsTrigger>
           <TabsTrigger value="worktrees" className="px-2 md:px-3">{m.repos.tabs.worktrees} <Count n={worktreeCount} /></TabsTrigger>
           {hasForge && <TabsTrigger value="prs" className="px-2 md:px-3">{m.repos.tabs.prs}</TabsTrigger>}
-        </TabsList>
+          <TabsTrigger value="landings" className="px-2 md:px-3">{m.repos.tabs.landings}</TabsTrigger>
+        </ScrollTabsList>
         <TabsContent value="overview" className="flex flex-col gap-6">
-          <Overview repo={r} />
+          <Overview repo={r} onPlan={flow.start} />
         </TabsContent>
         <TabsContent value="branches">
           <Branches repo={r} />
         </TabsContent>
         <TabsContent value="worktrees" className="flex flex-col gap-2">
-          {r.clones.flatMap((c) => c.worktrees.map((w) => <WorktreeCard key={c.host + w.path} showRepo={false} worktree={{ ...w, id: c.host + ":" + w.path, name: w.path, host: c.host, repo: r.key } satisfies WorktreeItem} />))}
+          <Worktrees repo={r} onPlan={flow.start} />
         </TabsContent>
         {hasForge && (
-          <TabsContent value="prs">
+          <TabsContent value="prs" className="flex flex-col gap-3">
+            <SyncPrsButton repo={key} className="items-start" />
             <Prs repo={key} />
           </TabsContent>
         )}
+        <TabsContent value="landings" className="flex flex-col gap-3">
+          {tab === "landings" && <Landings repo={r} search={search} update={(patch) => void navigate({ search: (p) => ({ ...p, ...patch }) })} />}
+        </TabsContent>
       </Tabs>
+      {flow.sheet}
     </>
   );
 }
@@ -91,7 +110,93 @@ function About({ repo }: { repo: RepositoryDetail }) {
 /** Base SHA as one clone sees it (remote-tracking ref or local trunk). */
 const baseSha = (c: Clone, ref: string) => c.remoteBranches.find((b) => b.name === ref)?.sha ?? c.branches.find((b) => b.name === ref)?.sha ?? "";
 
-function Overview({ repo }: { repo: RepositoryDetail }) {
+function Worktrees({ repo, onPlan }: { repo: RepositoryDetail; onPlan: (p: PlanInput) => void }) {
+  const verdicts = useMemo(() => new Map(repo.branches.map((b) => [b.name, b.verdict])), [repo.branches]);
+  const rows = repo.clones.flatMap((c) => c.worktrees.map((w) => ({ clone: c, w: { ...w, id: c.host + ":" + w.path, name: w.path, host: c.host, repo: repo.key } satisfies WorktreeItem })));
+  if (!rows.length) return <EmptyState>{m.repos.noWorktrees}</EmptyState>;
+  return rows.map(({ clone: c, w }) => {
+    const action = canPrune(w) ? (
+      <Button variant="outline" className="h-11 md:h-8" onClick={() => onPlan({ kind: "prune-worktree", targets: [{ host: c.host, repo: c.path, worktree: w.path }] })}>
+        <EraserIcon />{m.worktrees.prune}
+      </Button>
+    ) : canSwitchToBase(w, w.branch ? verdicts.get(w.branch) : undefined) ? (
+      <Button variant="outline" className="h-11 md:h-8" onClick={() => onPlan({ kind: "switch-to-base", targets: [{ host: c.host, repo: c.path, branch: w.branch ?? undefined, worktree: w.path }] })}>
+        <UndoIcon />{m.worktrees.switchToBase}
+      </Button>
+    ) : undefined;
+    return <WorktreeCard key={w.id} showRepo={false} worktree={w} actions={action} />;
+  });
+}
+
+function Landings({ repo, search, update }: { repo: RepositoryDetail; search: RepoSearch; update: (patch: Partial<RepoSearch>) => void }) {
+  const bases = [...new Set(repo.clones.flatMap((c) => c.bases.map(stripRemote)))].sort();
+  const live = useMemo(() => new Set(repo.branches.map((b) => b.id)), [repo.branches]);
+  const baseIds = useMemo(() => new Set(repo.branches.filter((b) => b.verdict === "base").map((b) => b.id)), [repo.branches]);
+  const landings = useQuery({ ...q.landings({ repo: repo.key, base: search.base || undefined, page: search.page, pageSize: LANDINGS_PAGE }), placeholderData: keepPreviousData });
+  return (
+    <>
+      {bases.length > 1 && (
+        <FilterField label={m.provenance.base} labelFor="landing-base" className="max-w-xs">
+          <OptionSelect id="landing-base" value={search.base} onChange={(base) => update({ base, page: 1 })} anyLabel={m.provenance.allBases} options={bases.map((b) => ({ value: b, label: b }))} />
+        </FilterField>
+      )}
+      {landings.error ? (
+        <ErrorState error={landings.error} onRetry={() => void landings.refetch()} />
+      ) : !landings.data ? (
+        <ListSkeleton />
+      ) : !landings.data.items.length ? (
+        <EmptyState>{m.provenance.landingsEmpty}</EmptyState>
+      ) : (
+        <>
+          <RowList className={cn(landings.isPlaceholderData && "opacity-60 transition-opacity")}>
+            {landings.data.items.map((l) => <LandingRow key={l.sha} repo={repo.key} landing={l} liveIds={live} baseIds={baseIds} />)}
+          </RowList>
+          <Pagination page={search.page} total={landings.data.total} pageSize={LANDINGS_PAGE} onPage={(page) => update({ page })} />
+        </>
+      )}
+    </>
+  );
+}
+
+/** "Change URL" for one remote on every clone that has it (e.g. the repository moved to another forge). */
+function RemoteUrlSheet({ remote, targets, current, onClose, onPlan }: { remote: string | null; targets: ActionTarget[]; current: string; onClose: () => void; onPlan: (p: PlanInput) => void }) {
+  const [url, setUrl] = useState(current);
+  const valid = url.trim() !== "" && url.trim() !== current && !url.trim().startsWith("-");
+  return (
+    <Sheet open={remote !== null} onOpenChange={(o) => !o && onClose()}>
+      <SheetContent side="right" className="gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-md">
+        <SheetHeader className="border-b">
+          <SheetTitle>{m.actions.kind["set-remote-url"]}: {remote}</SheetTitle>
+          <SheetDescription>{m.actions.hint["set-remote-url"]}</SheetDescription>
+        </SheetHeader>
+        <form
+          className="flex flex-1 flex-col"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!valid) return;
+            onClose();
+            onPlan({ kind: "set-remote-url", targets: targets.map((t) => ({ ...t, url: url.trim() })) });
+          }}
+        >
+          <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4">
+            <FilterField label={m.actions.newUrl} labelFor="remote-url">
+              <Input id="remote-url" className="h-11 font-mono md:h-9" value={url} onChange={(e) => setUrl(e.target.value)} autoComplete="off" spellCheck={false} />
+            </FilterField>
+            <ul className="flex flex-col gap-1 text-xs text-muted-foreground">
+              {targets.map((t) => <li key={t.host + t.repo}><Mono>{t.host}:{t.repo}</Mono></li>)}
+            </ul>
+          </div>
+          <SheetFooter className="border-t">
+            <Button type="submit" className="h-11 w-full md:h-9" disabled={!valid}>{m.actions.review}</Button>
+          </SheetFooter>
+        </form>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+function Overview({ repo, onPlan }: { repo: RepositoryDetail; onPlan: (p: PlanInput) => void }) {
+  const [editRemote, setEditRemote] = useState<string | null>(null);
   const bases = [...new Set(repo.clones.flatMap((c) => c.bases))];
   const remotes = [...new Set(repo.clones.flatMap((c) => c.remotes.map((r) => r.name)))];
   const stashes = repo.clones.flatMap((c) => c.stashes.map((s) => ({ host: c.host, ...parseStash(s) })));
@@ -102,7 +207,9 @@ function Overview({ repo }: { repo: RepositoryDetail }) {
         <div className="grid gap-2 lg:grid-cols-2">
           {repo.clones.map((c) => {
             const origin = c.remotes.find((r) => r.name === "origin") ?? c.remotes[0];
-            const dirty = c.worktrees.filter((w) => w.dirty).length;
+            const changed = c.worktrees.filter(hasChanges).length;
+            const missing = c.worktrees.filter(isMissing).length;
+            const behind = c.branches.filter(canFastForward);
             return (
               <Card key={c.host + c.path} className="flex flex-col gap-2">
                 <div className="flex items-center justify-between gap-2">
@@ -115,8 +222,16 @@ function Overview({ repo }: { repo: RepositoryDetail }) {
                   [m.repos.path, <Mono key="p">{c.path}</Mono>],
                   [m.repos.origin, origin ? <Mono key="o">{origin.url}</Mono> : <span key="o" className="text-muted-foreground">{m.repos.noRemotes}</span>],
                   [m.repos.base, c.bases[0] ? <Mono key="b">{c.bases[0]}</Mono> : "—"],
-                  [m.nav.worktrees, <span key="w">{c.worktrees.length}{dirty ? ` · ${dirty} ${m.flag.dirty.toLowerCase()}` : ""}</span>],
+                  [m.nav.worktrees, <span key="w">{c.worktrees.length}{changed ? ` · ${changed} ${m.worktrees.status.changes.toLowerCase()}` : ""}{missing ? ` · ${missing} ${m.worktrees.status.missing.toLowerCase()}` : ""}</span>],
                 ]} />
+                {behind.map((b) => (
+                  <div key={b.name} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-muted/50 p-2 text-sm">
+                    <span>{m.repos.behindBase(b.name, b.base ?? "", b.behind)}</span>
+                    <Button variant="outline" className="h-11 md:h-8" onClick={() => onPlan({ kind: "fast-forward-base", targets: [{ host: c.host, repo: c.path, branch: b.name }] })}>
+                      <FastForwardIcon />{m.branches.fastForward(b.base ?? "")}
+                    </Button>
+                  </div>
+                ))}
               </Card>
             );
           })}
@@ -136,6 +251,9 @@ function Overview({ repo }: { repo: RepositoryDetail }) {
                   <span className="flex flex-wrap items-center gap-2">
                     <span className="font-medium">{name}</span>
                     {defaults.map((d) => <Pill key={d}>{m.repos.defaultBranch}: {d}</Pill>)}
+                    <Button variant="ghost" size="sm" className="ml-auto h-11 md:h-7" onClick={() => setEditRemote(name)}>
+                      <PencilIcon />{m.repos.changeUrl}
+                    </Button>
                   </span>
                   {urls.map((u) => <Mono key={u}>{u}</Mono>)}
                   {push.map((u) => <Mono key={u} className="text-muted-foreground">{m.repos.push}: {u}</Mono>)}
@@ -204,6 +322,16 @@ function Overview({ repo }: { repo: RepositoryDetail }) {
       )}
 
       <ForgeLink repo={repo.key} />
+      {editRemote !== null && (
+        <RemoteUrlSheet
+          key={editRemote}
+          remote={editRemote}
+          current={repo.clones.flatMap((c) => c.remotes).find((r) => r.name === editRemote)?.url ?? ""}
+          targets={repo.clones.filter((c) => c.remotes.some((r) => r.name === editRemote)).map((c) => ({ host: c.host, repo: c.path, remote: editRemote }))}
+          onClose={() => setEditRemote(null)}
+          onPlan={onPlan}
+        />
+      )}
     </>
   );
 }

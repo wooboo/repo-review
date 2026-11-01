@@ -2,10 +2,12 @@ import { Link } from "@tanstack/react-router";
 import { ChevronDownIcon } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
-import { ChecksBadge, DivergenceBar, FlagChips, Mono, Pill, PrStateBadge, RelativeTime, ReviewBadge, ShaChips, VerdictBadge } from "@/components/domain";
+import { ChecksBadge, DivergenceBar, FlagChips, LandedBadge, MethodPill, Mono, Pill, PrStateBadge, RelativeTime, ReviewBadge, ShaChips, VerdictBadge } from "@/components/domain";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { BranchGroup, PullRequest, WorktreeItem } from "@/lib/api/types";
 import { repoName } from "@/lib/format";
+import { anyLanding } from "@/lib/provenance";
+import { hasChanges, isMissing } from "@/lib/worktrees";
 import { q } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { m } from "@/messages";
@@ -14,18 +16,23 @@ import { m } from "@/messages";
 export const leadClone = (b: BranchGroup) => [...b.clones].sort((x, y) => y.ahead - x.ahead || y.behind - x.behind)[0];
 export const divergenceMax = (rows: readonly BranchGroup[]) => Math.max(10, ...rows.flatMap((b) => b.clones.flatMap((c) => [c.ahead, c.behind])));
 
-/** Pull requests by branch id (from the PR cache); empty when no forge is configured. */
+/**
+ * Pull requests by branch id (every page of the PR cache); empty when no forge is configured.
+ * Grouped branches carry no PR reference in the read model, so the badge is joined here.
+ */
 export function usePrsByBranch(repo?: string) {
-  const prs = useQuery(q.prs({ state: "all", repo, page: 1, pageSize: 100_000 }));
+  const prs = useQuery(q.allPrs({ state: "all", repo }));
   return useMemo(() => {
     const map = new Map<string, PullRequest>();
-    for (const p of prs.data?.items ?? []) if (p.branchId && (!map.has(p.branchId) || p.state === "open")) map.set(p.branchId, p);
+    for (const p of prs.data ?? []) if (p.branchId && (!map.has(p.branchId) || p.state === "open")) map.set(p.branchId, p);
     return map;
   }, [prs.data]);
 }
 
 export function BranchRow({ branch, max, showRepo = true, pr }: { branch: BranchGroup; max: number; showRepo?: boolean; pr?: PullRequest }) {
   const lead = leadClone(branch);
+  const landed = anyLanding(branch);
+  const showPr = pr && pr.id !== landed?.pullRequestId;
   return (
     <li>
       <Link to="/branches/$id" params={{ id: branch.id }} className="flex flex-col gap-1.5 p-3 hover:bg-muted/50">
@@ -42,9 +49,10 @@ export function BranchRow({ branch, max, showRepo = true, pr }: { branch: Branch
           <ShaChips clones={branch.clones} />
           <DivergenceBar behind={lead.behind} ahead={lead.ahead} base={lead.base} max={max} />
         </span>
-        {(pr || branch.stale || branch.dirty || branch.localOnly || branch.differentShas || branch.clones.some((c) => c.upstreamGone || c.containedIn.length)) && (
+        {(showPr || landed || branch.stale || branch.dirty || branch.localOnly || branch.differentShas || branch.clones.some((c) => c.upstreamGone || c.containedIn.length)) && (
           <span className="flex flex-wrap gap-1">
-            {pr && <PrStateBadge pr={pr} />}
+            {landed && <LandedBadge landed={landed} />}
+            {showPr && <PrStateBadge pr={pr} />}
             <FlagChips branch={branch} />
           </span>
         )}
@@ -67,8 +75,9 @@ export function PrRow({ pr, showRepo = true }: { pr: PullRequest; showRepo?: boo
           <span>{m.prs.by(pr.author)}</span>
           <RelativeTime iso={pr.updatedAt} />
         </span>
-        {(pr.checks.state !== "none" || pr.review !== "none") && (
+        {(pr.checks.state !== "none" || pr.review !== "none" || (pr.state === "merged" && pr.mergeMethod && pr.mergeMethod !== "unknown")) && (
           <span className="flex flex-wrap gap-1">
+            {pr.state === "merged" && <MethodPill method={pr.mergeMethod} />}
             <ChecksBadge checks={pr.checks} />
             <ReviewBadge review={pr.review} />
           </span>
@@ -80,11 +89,12 @@ export function PrRow({ pr, showRepo = true }: { pr: PullRequest; showRepo?: boo
 
 const xyLabel = (xy: string) => (xy === "??" ? "new" : xy.replace(/\./g, " ").trim() || xy);
 
-export function WorktreeCard({ worktree: w, showRepo = true }: { worktree: WorktreeItem; showRepo?: boolean }) {
+export function WorktreeCard({ worktree: w, showRepo = true, actions }: { worktree: WorktreeItem; showRepo?: boolean; actions?: React.ReactNode }) {
   const counts = m.worktrees.counts(w.staged, w.unstaged, w.untracked, w.conflicts);
-  const hasFiles = w.files.length > 0;
+  const missing = isMissing(w);
+  const hasFiles = !missing && w.files.length > 0;
   return (
-    <Collapsible className={cn("rounded-xl border bg-card", !w.exists && "border-destructive/40")}>
+    <Collapsible className={cn("rounded-xl border bg-card", missing && "border-destructive/40")}>
       <CollapsibleTrigger asChild disabled={!hasFiles}>
         <button type="button" className="group flex w-full items-start gap-2 p-3 text-left">
           <span className="flex min-w-0 flex-1 flex-col gap-1">
@@ -98,20 +108,21 @@ export function WorktreeCard({ worktree: w, showRepo = true }: { worktree: Workt
             </span>
             <Mono className="text-muted-foreground">{w.host}:{w.path}</Mono>
             <span className="flex flex-wrap items-center gap-1">
-              {!w.exists && <Pill t="bad">{m.worktrees.missing}</Pill>}
+              {missing && <Pill t="bad">{m.worktrees.missing}</Pill>}
               {w.main && <Pill>{m.worktrees.main}</Pill>}
               {w.locked && <Pill t="warn">{m.worktrees.locked}</Pill>}
               {w.prunable && <Pill t="warn">{m.worktrees.prunable}</Pill>}
               {w.operations.map((o) => (
                 <Pill key={o} t="bad">{o}</Pill>
               ))}
-              {w.dirty && <Pill t="warn">{counts || m.flag.dirty}</Pill>}
-              {w.error && <Pill t="bad" title={w.error}>{m.somethingWrong}</Pill>}
+              {hasChanges(w) && <Pill t="warn">{counts || m.flag.dirty}</Pill>}
+              {w.error && !missing && <Pill t="bad" title={w.error}>{m.somethingWrong}</Pill>}
             </span>
           </span>
           {hasFiles && <ChevronDownIcon aria-label={m.worktrees.files(w.total || w.files.length)} className="mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />}
         </button>
       </CollapsibleTrigger>
+      {actions && <div className="flex flex-wrap gap-2 px-3 pb-3">{actions}</div>}
       {hasFiles && (
         <CollapsibleContent>
           <ul className="flex flex-col border-t py-1 font-mono text-xs">

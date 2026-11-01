@@ -1,18 +1,17 @@
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { RefreshCwIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { FilterField } from "@/components/filters/field";
 import { FilterLayout, OptionSelect, Pagination, SearchInput } from "@/components/filters/controls";
-import { IconButton } from "@/components/icon-button";
 import { PageHeader } from "@/components/page-header";
 import { PrRow, RowList } from "@/components/rows";
+import { SyncPrsButton } from "@/components/sync-prs";
 import { EmptyState, ErrorState, ListSkeleton } from "@/components/states";
 import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { refreshPullRequests } from "@/lib/api/client";
 import { repoName } from "@/lib/format";
-import { q, useJob } from "@/lib/queries";
+import { paginate } from "@/lib/api/client";
+import { q } from "@/lib/queries";
 import { title } from "@/lib/route-helpers";
 import { PR_FILTER_KEYS, prListSearch, stripDefaults, validator, type PrListSearch } from "@/lib/search";
 import { cn } from "@/lib/utils";
@@ -31,33 +30,25 @@ const CHECKS = ["success", "failure", "pending", "none"] as const;
 function Prs() {
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
-  const client = useQueryClient();
   const update = useCallback(
     (patch: Partial<PrListSearch>, replace = false) => void navigate({ search: (prev) => ({ ...prev, ...patch, page: patch.page ?? 1 }), replace }),
     [navigate],
   );
   const settings = useQuery(q.settings());
   const repos = useQuery(q.repos({ pageSize: 200 }));
-  // TODO(contract-gap): the checks filter is applied to the page; the server list has no checks filter.
-  const prs = useQuery({
-    ...q.prs({ repo: search.repo || undefined, state: search.state, text: search.q || undefined, page: search.checks ? 1 : search.page, pageSize: search.checks ? 100_000 : PAGE_SIZE }),
-    placeholderData: keepPreviousData,
-    enabled: (settings.data?.forges.length ?? 0) > 0,
-  });
-  const items = useMemo(() => {
-    const all = (prs.data?.items ?? []).filter((p) => !search.checks || p.checks.state === search.checks);
-    return search.checks ? all.slice((search.page - 1) * PAGE_SIZE, search.page * PAGE_SIZE) : all;
-  }, [prs.data, search.checks, search.page]);
-  const total = search.checks ? (prs.data?.items ?? []).filter((p) => p.checks.state === search.checks).length : (prs.data?.total ?? 0);
-  const refresh = useMutation({ mutationFn: () => refreshPullRequests({ repo: search.repo || undefined }) });
-  const refreshJob = useJob(refresh.data?.id ?? null, () => null);
-  const refreshing = refresh.isPending || refreshJob.data?.status === "running";
-  const refreshStatus = refreshJob.data?.status;
-  useEffect(() => {
-    if (refreshStatus !== "done" && refreshStatus !== "failed") return;
-    refresh.reset();
-    void client.invalidateQueries({ queryKey: ["prs"] });
-  }, [refreshStatus, client]);
+  const hasForges = (settings.data?.forges.length ?? 0) > 0;
+  const filter = { repo: search.repo || undefined, state: search.state, text: search.q || undefined };
+  // Server-side paging, except with a checks filter: the PR list input has none, so every page is
+  // loaded and filtered here (kept until PullRequestListInput gains `checks`).
+  const paged = useQuery({ ...q.prs({ ...filter, page: search.page, pageSize: PAGE_SIZE }), placeholderData: keepPreviousData, enabled: hasForges && !search.checks });
+  const all = useQuery({ ...q.allPrs(filter), placeholderData: keepPreviousData, enabled: hasForges && !!search.checks });
+  const prs = search.checks ? all : paged;
+  const page = useMemo(
+    () => (search.checks ? (all.data ? paginate(all.data.filter((p) => p.checks.state === search.checks), search.page, PAGE_SIZE) : undefined) : paged.data),
+    [search.checks, search.page, all.data, paged.data],
+  );
+  const items = page?.items ?? [];
+  const total = page?.total ?? 0;
   const activeCount = prListSearch.activeCount(search, PR_FILTER_KEYS);
   const noForges = settings.data && !settings.data.forges.length;
 
@@ -65,12 +56,8 @@ function Prs() {
     <>
       <PageHeader
         title={m.prs.title}
-        subtitle={prs.data ? m.results(total) : undefined}
-        actions={!noForges && (
-          <IconButton label={m.prs.refresh} disabled={refreshing} onClick={() => refresh.mutate()}>
-            <RefreshCwIcon className={cn(refreshing && "animate-spin")} />
-          </IconButton>
-        )}
+        subtitle={page ? m.results(total) : undefined}
+        actions={!noForges && <SyncPrsButton repo={search.repo || undefined} />}
       />
       {noForges ? (
         <EmptyState action={<Button asChild variant="outline" className="h-11 md:h-9"><Link to="/settings">{m.nav.settings}</Link></Button>}>{m.prs.noForges}</EmptyState>

@@ -1,6 +1,6 @@
-/** Contract v2 transport. Business logic and long-running jobs live on the server. */
+/** Contract v2 transport: thin typed calls of the server functions. Business logic and jobs live on the server. */
 import * as server from "@/server/functions";
-import { mapJob, pullRequestId } from "./adapters";
+import { allPages, MAX_PAGE, paginate } from "./pages";
 import type {
   AgentInfo,
   AgentRun,
@@ -8,9 +8,13 @@ import type {
   AgentRunInput,
   AgentRunQuery,
   BranchGroup,
+  BranchHistoryItem,
+  BranchHistoryQuery,
   Dashboard,
   Job,
   JobRef,
+  Landing,
+  LandingQuery,
   ListInput,
   MergeMethod,
   Page,
@@ -26,225 +30,154 @@ import type {
   Verdict,
   WorktreeItem,
 } from "./types";
-const ALL = 200;
-function paginate<T>(rows: T[], page: number, pageSize: number): Page<T> {
-  const p = Math.max(1, page);
-  return {
-    items: rows.slice((p - 1) * pageSize, p * pageSize),
-    total: rows.length,
-    page: p,
-    pageSize,
-  };
-}
-async function allPages<T>(
-  load: (page: number) => Promise<Page<T>>,
-): Promise<T[]> {
-  const first = await load(1),
-    rows = [...first.items];
-  for (let page = 2; page <= Math.ceil(first.total / ALL); page++)
-    rows.push(...(await load(page)).items);
-  return rows;
-}
-export function errorMessage(e: unknown): string {
-  if (e instanceof Error) return e.message.replace(/^(Error: )+/, "");
-  if (
-    e &&
-    typeof e === "object" &&
-    "message" in e &&
-    typeof e.message === "string"
-  )
-    return e.message;
-  return String(e);
-}
-type BackendBranch = NonNullable<Awaited<ReturnType<typeof server.getBranch>>>;
-const branch = (b: BackendBranch): BranchGroup => ({
-  ...b,
-  jev: b.jev ? { ...b.jev, flags: [...b.jev.flags] } : null,
-});
+
+export { allPages, errorMessage, MAX_PAGE, paginate } from "./pages";
+
 export async function getDashboard(): Promise<Dashboard> {
   const d = await server.getDashboard();
-  return {
-    ...d,
-    verdicts: d.verdicts as Dashboard["verdicts"],
-    runningScans: d.runningScans as Scan[],
-    lastScan: d.lastScan as Scan | null,
-  };
+  return { ...d, verdicts: d.verdicts as Dashboard["verdicts"], runningScans: d.runningScans as Scan[], lastScan: d.lastScan as Scan | null };
 }
-export async function listRepositories(
-  input: ListInput,
-): Promise<Page<RepositorySummary>> {
+
+export async function listRepositories(input: ListInput): Promise<Page<RepositorySummary>> {
   return server.listRepositories({ data: input });
 }
+
 export async function getRepository(id: string): Promise<RepositoryDetail> {
-  const r = await server.getRepository({ data: { id } });
-  return { ...r, branches: r.branches.map(branch) };
+  return server.getRepository({ data: { id } });
 }
-/** The UI offers multiple verdicts; the contract accepts one per request. */
-export async function searchBranches(
-  input: Omit<ListInput, "verdict"> & { verdicts?: readonly Verdict[] },
-): Promise<Page<BranchGroup>> {
+
+/**
+ * The UI offers several verdicts at once; ListInput accepts one. With two or more, every matching
+ * page is fetched per verdict and merged here (kept until ListInput takes a verdict list).
+ */
+export async function searchBranches(input: Omit<ListInput, "verdict"> & { verdicts?: readonly Verdict[] }): Promise<Page<BranchGroup>> {
   const { verdicts = [], ...rest } = input;
-  if (verdicts.length <= 1) {
-    const p = await server.searchBranches({
-      data: { ...rest, verdict: verdicts[0] },
-    });
-    return { ...p, items: p.items.map(branch) };
-  }
+  if (verdicts.length <= 1) return server.searchBranches({ data: { ...rest, verdict: verdicts[0] } });
   const rows = (
-    await Promise.all(
-      verdicts.map((verdict) =>
-        allPages((page) =>
-          server.searchBranches({
-            data: { ...rest, verdict, page, pageSize: ALL },
-          }),
-        ),
-      ),
-    )
+    await Promise.all(verdicts.map((verdict) => allPages((page) => server.searchBranches({ data: { ...rest, verdict, page, pageSize: MAX_PAGE } }))))
   ).flat();
-  rows.sort((a, b) =>
-    rest.sort === "date"
-      ? b.date.localeCompare(a.date)
-      : a.name.localeCompare(b.name),
-  );
-  return paginate(rows.map(branch), rest.page ?? 1, rest.pageSize ?? 50);
+  rows.sort((a, b) => (rest.sort === "date" ? b.date.localeCompare(a.date) : a.name.localeCompare(b.name)));
+  return paginate(rows, rest.page ?? 1, rest.pageSize ?? 50);
 }
-export async function allBranches(
-  input: ListInput = {},
-): Promise<BranchGroup[]> {
-  return (
-    await allPages((page) =>
-      server.searchBranches({ data: { ...input, page, pageSize: ALL } }),
-    )
-  ).map(branch);
+
+export async function allBranches(input: ListInput = {}): Promise<BranchGroup[]> {
+  return allPages((page) => server.searchBranches({ data: { ...input, page, pageSize: MAX_PAGE } }));
 }
+
 export async function getBranch(id: string): Promise<BranchGroup | null> {
-  const b = await server.getBranch({ data: { id } });
-  return b ? branch(b) : null;
+  return server.getBranch({ data: { id } });
 }
-export async function listWorktrees(
-  input: ListInput,
-): Promise<Page<WorktreeItem>> {
-  return server.listWorktrees({ data: input });
+
+export async function allWorktrees(input: ListInput = {}): Promise<WorktreeItem[]> {
+  return allPages((page) => server.listWorktrees({ data: { ...input, page, pageSize: MAX_PAGE } }));
 }
-export async function allWorktrees(
-  input: ListInput = {},
-): Promise<WorktreeItem[]> {
-  return allPages((page) => listWorktrees({ ...input, page, pageSize: ALL }));
-}
-export async function startScan(input: {
-  hosts: string[];
-  fetch: boolean;
-}): Promise<JobRef> {
+
+export async function startScan(input: { hosts: string[]; fetch: boolean }): Promise<JobRef> {
   return server.startScan({ data: input });
 }
+
 export async function getScan(id: string): Promise<Scan | null> {
   return (await server.getScan({ data: { id } })) as Scan | null;
 }
+
 export async function listScans(): Promise<Scan[]> {
-  return ((await server.listScans()) as Scan[]).sort((a, b) =>
-    b.started.localeCompare(a.started),
-  );
+  return ((await server.listScans()) as Scan[]).sort((a, b) => b.started.localeCompare(a.started));
 }
+
 export async function getSettings(): Promise<Settings> {
   return server.getSettings();
 }
+
 export async function updateSettings(settings: Settings): Promise<Settings> {
   return server.updateSettings({ data: settings });
 }
-export async function getBackgroundJob<T>(
-  id: string,
-  result: (value: unknown) => T,
-): Promise<Job<T> | null> {
-  const raw = await server.getBackgroundJob({ data: { id } });
-  return raw ? mapJob(raw, result) : null;
+
+/** A background job; `result` decodes the job's JSON result for the caller's job kind. */
+export async function getBackgroundJob<T>(id: string, result: (value: unknown) => T): Promise<Job<T> | null> {
+  const job = await server.getBackgroundJob({ data: { id } });
+  if (!job) return null;
+  const status = job.status === "done" ? "done" : job.status === "failed" ? "failed" : "running";
+  return { id: job.id, status, result: status === "done" ? result(job.result) : null, error: job.error ?? null };
 }
+
 export async function planActions(input: PlanInput): Promise<JobRef> {
   return server.planActions({ data: input });
 }
+
 export async function applyActions(ids: string[]): Promise<JobRef> {
   return server.applyActions({ data: { ids } });
 }
-export async function listActions(input: {
-  status?: PlannedAction["status"];
-  repo?: string;
-  page: number;
-  pageSize: number;
-}): Promise<Page<PlannedAction>> {
+
+export async function listActions(input: { status?: PlannedAction["status"]; repo?: string; page: number; pageSize: number }): Promise<Page<PlannedAction>> {
   return server.listActions({ data: input });
 }
-export async function listPullRequests(
-  input: PullRequestQuery,
-): Promise<Page<PullRequest>> {
+
+export async function listPullRequests(input: PullRequestQuery): Promise<Page<PullRequest>> {
   return server.listPullRequests({ data: input });
 }
-export async function getPullRequest(
-  id: string,
-): Promise<PullRequestDetail | null> {
-  const p = await server.getPullRequest({ data: { id } });
-  return p
-    ? {
-        ...p,
-        files: [...p.files],
-        checkRuns: [...p.checkRuns],
-        reviews: [...p.reviews],
-        comments: [...p.comments],
-      }
-    : null;
+
+export async function allPullRequests(input: Omit<PullRequestQuery, "page" | "pageSize">): Promise<PullRequest[]> {
+  return allPages((page) => listPullRequests({ ...input, page, pageSize: MAX_PAGE }));
 }
-export async function refreshPullRequests(input: {
-  repo?: string;
-}): Promise<JobRef> {
+
+export async function getPullRequest(id: string): Promise<PullRequestDetail | null> {
+  return server.getPullRequest({ data: { id } });
+}
+
+export async function refreshPullRequests(input: { repo?: string }): Promise<JobRef> {
   return server.refreshPullRequests({ data: input });
 }
-export async function createPullRequest(input: {
-  branchId: string;
-  cloneHost?: string;
-  base?: string;
-  title: string;
-  body: string;
-  draft: boolean;
-}): Promise<PullRequest> {
+
+export async function createPullRequest(input: { branchId: string; cloneHost?: string; base?: string; title: string; body: string; draft: boolean }): Promise<PullRequest> {
   return server.createPullRequest({ data: input });
 }
-export async function mergePullRequest(input: {
-  id: string;
-  method: MergeMethod;
-  deleteRemoteBranch: boolean;
-}): Promise<PullRequest> {
+
+export async function mergePullRequest(input: { id: string; method: MergeMethod; deleteRemoteBranch: boolean }): Promise<PullRequest> {
   return server.mergePullRequest({ data: input });
 }
-export async function closePullRequest(input: {
-  id: string;
-}): Promise<PullRequest> {
+
+export async function closePullRequest(input: { id: string }): Promise<PullRequest> {
   return server.closePullRequest({ data: input });
 }
-export async function commentPullRequest(input: {
-  id: string;
-  body: string;
-}): Promise<{ ok: true }> {
+
+export async function commentPullRequest(input: { id: string; body: string }): Promise<{ ok: true }> {
   return server.commentPullRequest({ data: input });
 }
-export async function listAgents(): Promise<AgentInfo[]> {
-  return (await server.listAgents()).map((a) => ({
-    ...a,
-    models: [...a.models],
-  }));
+
+export async function listAgents(): Promise<readonly AgentInfo[]> {
+  return server.listAgents();
 }
+
 export async function startAgentRun(input: AgentRunInput): Promise<JobRef> {
   return server.startAgentRun({ data: input });
 }
-export async function getAgentRun(
-  id: string,
-  cursor = 0,
-): Promise<AgentRunDetail | null> {
+
+export async function getAgentRun(id: string, cursor = 0): Promise<AgentRunDetail | null> {
   return server.getAgentRun({ data: { id, cursor } });
 }
-export async function listAgentRuns(
-  input: AgentRunQuery,
-): Promise<Page<AgentRun>> {
+
+export async function listAgentRuns(input: AgentRunQuery): Promise<Page<AgentRun>> {
   return server.listAgentRuns({ data: input });
 }
+
 export async function cancelAgentRun(id: string): Promise<AgentRun> {
   return server.cancelAgentRun({ data: { id } });
 }
-export { pullRequestId };
+
+// ---------- Contract v3: pull-request provenance
+
+export async function syncPullRequests(input: { repo?: string; full?: boolean }): Promise<JobRef> {
+  return server.syncPullRequests({ data: input });
+}
+
+export async function listLandings(input: LandingQuery): Promise<Page<Landing>> {
+  return server.listLandings({ data: input });
+}
+
+export async function getCommitProvenance(input: { repo: string; sha: string }): Promise<Landing | null> {
+  return server.getCommitProvenance({ data: input });
+}
+
+export async function listBranchHistory(input: BranchHistoryQuery): Promise<Page<BranchHistoryItem>> {
+  return server.listBranchHistory({ data: input });
+}

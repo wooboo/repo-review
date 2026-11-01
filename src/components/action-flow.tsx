@@ -53,8 +53,8 @@ function Flow({ request }: { request: PlanInput }) {
   return (
     <>
       <SheetHeader className="border-b">
-        <SheetTitle>{results ? m.actions.resultTitle : m.actions.planTitle}</SheetTitle>
-        <SheetDescription>{kind === "archive-and-delete" ? m.actions.archiveHint : m.actions.deleteHint}</SheetDescription>
+        <SheetTitle>{results ? m.actions.resultTitle : m.actions.planTitle[kind]}</SheetTitle>
+        <SheetDescription>{m.actions.hint[kind]}</SheetDescription>
       </SheetHeader>
       <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4">
         {planError ? (
@@ -125,10 +125,25 @@ function Busy({ text }: { text: string }) {
   );
 }
 
+/** What one action touches, in the words of its kind. */
+export function actionHeadline(a: Pick<PlannedAction, "kind" | "target">): string {
+  const t = a.target;
+  switch (a.kind) {
+    case "prune-worktree":
+      return t.worktree ?? t.repo;
+    case "set-remote-url":
+      return `${t.remote ?? "origin"} → ${t.url ?? ""}`;
+    case "push-branch":
+      return `${t.branch ?? ""} → ${t.remote ?? "origin"}`;
+    default:
+      return t.branch ?? t.worktree ?? m.actions.kind[a.kind];
+  }
+}
+
 function ActionTargetText({ action }: { action: PlannedAction }) {
   return (
     <span className="flex min-w-0 flex-col gap-0.5">
-      <span className="font-medium break-all">{action.target.branch ?? action.target.worktree ?? m.actions.kind[action.kind]}</span>
+      <span className="font-medium break-all">{actionHeadline(action)}</span>
       <span className="text-xs text-muted-foreground break-all">
         {action.repoKey ? repoName(action.repoKey) + " · " : ""}
         {action.target.host}:{action.target.repo}
@@ -157,4 +172,10 @@ export function ActionList({ actions, showRestore }: { actions: readonly Planned
       ))}
     </ul>
   );
+}
+
+/** One action flow per view: `start(plan)` opens the review sheet; render `sheet` once. */
+export function useActionFlow() {
+  const [request, setRequest] = useState<PlanInput | null>(null);
+  return { start: setRequest, sheet: <ActionFlowSheet request={request} onClose={() => setRequest(null)} /> };
 }

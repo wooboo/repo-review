@@ -1,11 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { branchSearch, prListSearch, prSearch, repoListSearch, worktreeSearch, BRANCH_FILTER_KEYS } from "./search";
+import { branchSearch, prListSearch, prSearch, repoListSearch, repoSearch, worktreeSearch, BRANCH_FILTER_KEYS, WORKTREE_FILTER_KEYS } from "./search";
 import { divergenceWidth, formatDuration, parseCommit, parseShortstat, parseStash, readmeSummary, relativeTime, stripRemote, repoName } from "./format";
 import { countVerdicts, divergingShas, groupByVerdict, needsDecision, verdictsByRepo } from "./verdicts";
-import { mapAction, mapAgentEvent, mapAgentRun, mapPullRequest, mapPullRequestDetail, mergeChunks, parseBranchId, parsePullRequestId, reviewSummary } from "./api/adapters";
+import { mergeChunks } from "./agent-events";
+import { parseBranchId, parsePullRequestId, pullRequestId } from "./api/ids";
+import { allPages, paginate } from "./api/pages";
 import { parseSearchWith } from "@tanstack/react-router";
 import { stringifySearch } from "./url";
 import { parseDiff } from "./diff";
+import { coalescer } from "./queries";
 
 describe("search params", () => {
   test("defaults for an empty URL", () => {
@@ -114,27 +117,14 @@ describe("verdicts", () => {
   });
 });
 
-describe("contract-v2 adapters", () => {
+describe("ids and helpers", () => {
   test("ids", () => {
     expect(parsePullRequestId("github.com/o/r!42")).toEqual({ repo: "github.com/o/r", number: 42 });
+    expect(parsePullRequestId(pullRequestId("forge.example/o/r", 7))).toEqual({ repo: "forge.example/o/r", number: 7 });
     expect(parsePullRequestId("nope")).toBeNull();
     expect(parseBranchId("github.com/o/r#feat/a#b")).toEqual({ repo: "github.com/o/r", name: "feat/a#b" });
   });
-  test("pull request", () => {
-    const pr = mapPullRequest({ number: 7, title: "T", html_url: "u", user: { login: "me" }, state: "closed", merged_at: "2026-01-01", head: { ref: "feat", sha: "s" }, base: { ref: "main" }, created_at: "c", updated_at: "u2", draft: false }, "github.com/o/r", "github");
-    expect(pr).toMatchObject({ id: "github.com/o/r!7", state: "merged", head: "feat", base: "main", branchId: "github.com/o/r#feat", author: "me" });
-    const d = mapPullRequestDetail({ pull: { number: 7, state: "open", body: "B" }, diff: "x".repeat(10), files: [{ filename: "a", status: "added", additions: 1, deletions: 0 }], reviews: [{ user: { login: "x" }, state: "APPROVED", body: "" }] }, "r", "forgejo");
-    expect(d).toMatchObject({ state: "open", body: "B", review: "approved", diffTruncated: false, files: [{ path: "a" }] });
-    expect(reviewSummary([{ author: "a", state: "APPROVED" }, { author: "b", state: "REQUEST_CHANGES" }])).toBe("changes_requested");
-    expect(reviewSummary([{ author: "a", state: "CHANGES_REQUESTED" }, { author: "a", state: "APPROVED" }])).toBe("approved");
-  });
-  test("agent runs and events", () => {
-    const run = mapAgentRun({ id: "1", agent: "claude", repo: "/w/r", branch: "feat", status: "running", started: "s", events: [], summary: "" }, () => "github.com/o/r");
-    expect(run).toMatchObject({ agentId: "claude", repo: "github.com/o/r", branchId: "github.com/o/r#feat", status: "running", summary: null, task: "custom" });
-    expect(mapAgentEvent({ at: "t", event: { type: "stdout", text: "hi" } }, 3)).toEqual({ seq: 3, at: "t", kind: "message", text: "hi" });
-    expect(mapAgentEvent({ at: "t", event: { sessionId: "s", update: { sessionUpdate: "tool_call", title: "Read file", status: "pending" } } }, 0).kind).toBe("tool");
-    expect(mapAgentEvent({ at: "t", event: { sessionId: "s", toolCall: { title: "Edit" }, options: [] } }, 0)).toMatchObject({ kind: "permission", text: "Edit" });
-    expect(mapAgentEvent({ at: "t", event: { type: "error", message: "boom" } }, 0).kind).toBe("error");
+  test("agent message chunks merge", () => {
     const merged = mergeChunks([
       { seq: 0, at: "", kind: "message", text: "Hel" },
       { seq: 1, at: "", kind: "message", text: "lo" },
@@ -142,9 +132,49 @@ describe("contract-v2 adapters", () => {
     ]);
     expect(merged.map((e) => e.text)).toEqual(["Hello", "x"]);
   });
-  test("actions", () => {
-    const a = mapAction({ id: "a", host: "local", repo: "/w/r", branch: "old", status: "blocked", reason: "dirty", restore: "", archive: false }, () => "github.com/o/r");
-    expect(a).toMatchObject({ kind: "delete-branch", status: "blocked", branchId: "github.com/o/r#old", restore: null, reason: "dirty" });
+  test("paging helpers", async () => {
+    expect(paginate([1, 2, 3, 4, 5], 2, 2)).toEqual({ items: [3, 4], total: 5, page: 2, pageSize: 2 });
+    const rows = Array.from({ length: 450 }, (_, i) => i);
+    // The server clamps to 200 per page, whatever the client asks for.
+    const pages: number[] = [];
+    const all = await allPages(async (page) => (pages.push(page), paginate(rows, page, 200)));
+    expect(all).toHaveLength(450);
+    expect(pages).toEqual([1, 2, 3]);
+  });
+});
+
+describe("search params of the v3 filters", () => {
+  test("branch view", () => {
+    expect(branchSearch.decode({}).view).toBe("live");
+    expect(branchSearch.decode({ view: "gone" }).view).toBe("gone");
+    expect(branchSearch.decode({ view: "deleted" }).view).toBe("live");
+    expect(branchSearch.strip(branchSearch.decode({ view: "gone", repo: "github.com/o/r" }))).toEqual({ view: "gone", repo: "github.com/o/r" });
+    // The view is not a filter: it does not count towards the badge.
+    expect(branchSearch.activeCount(branchSearch.decode({ view: "gone" }), BRANCH_FILTER_KEYS)).toBe(0);
+  });
+  test("worktree status replaces the dirty switch", () => {
+    expect(worktreeSearch.decode({})).toEqual({ q: "", host: "", repo: "", status: "" });
+    expect(worktreeSearch.decode({ status: "missing" }).status).toBe("missing");
+    expect(worktreeSearch.decode({ status: "dirty" }).status).toBe("");
+    expect(worktreeSearch.strip(worktreeSearch.decode({ status: "changes" }))).toEqual({ status: "changes" });
+    expect(worktreeSearch.activeCount(worktreeSearch.decode({ status: "clean", q: "x" }), WORKTREE_FILTER_KEYS)).toBe(1);
+  });
+  test("repository landings tab and PR commits tab", () => {
+    expect(repoSearch.decode({})).toEqual({ tab: "overview", base: "", page: 1 });
+    const s = repoSearch.decode({ tab: "landings", base: "main", page: "3" });
+    expect(s).toEqual({ tab: "landings", base: "main", page: 3 });
+    expect(repoSearch.strip(s)).toEqual({ tab: "landings", base: "main", page: 3 });
+    expect(repoSearch.decode({ tab: "nope" }).tab).toBe("overview");
+    expect(prSearch.decode({ tab: "commits" }).tab).toBe("commits");
+  });
+  test("round-trip through the query string", () => {
+    const parse = parseSearchWith(JSON.parse);
+    const b = branchSearch.decode({ view: "gone", repo: "github.com/o/r", page: 2 });
+    expect(branchSearch.decode(parse(stringifySearch(branchSearch.strip(b))))).toEqual(b);
+    const w = worktreeSearch.decode({ status: "missing", host: "local" });
+    expect(worktreeSearch.decode(parse(stringifySearch(worktreeSearch.strip(w))))).toEqual(w);
+    const r = repoSearch.decode({ tab: "landings", page: 2 });
+    expect(repoSearch.decode(parse(stringifySearch(repoSearch.strip(r))))).toEqual(r);
   });
 });
 
@@ -173,5 +203,23 @@ describe("diff parser", () => {
     expect(lines[2]).toEqual({ kind: "del", text: "old", old: 11, new: null });
     expect(lines[3]).toEqual({ kind: "add", text: "new", old: null, new: 11 });
     expect(lines.at(-1)).toEqual({ kind: "ctx", text: "tail", old: 12, new: 13 });
+  });
+});
+
+describe("live events", () => {
+  test("bursts are coalesced into one flush of distinct keys", () => {
+    const flushed: string[][][] = [];
+    const timers: (() => void)[] = [];
+    const push = coalescer((keys) => flushed.push(keys), 1000, (f) => timers.push(f));
+    for (let i = 0; i < 500; i++) push({ type: "inventory", id: `github.com/o/r!${i}` });
+    push({ type: "job", id: "j1" });
+    expect(timers).toHaveLength(1);
+    expect(flushed).toHaveLength(0);
+    timers[0]();
+    expect(flushed).toEqual([[["inv"], ["prs"], ["pr"], ["job", "j1"]]]);
+    push({ type: "scan", id: "s" });
+    expect(timers).toHaveLength(2);
+    timers[1]();
+    expect(flushed[1]).toEqual([["scans"], ["inv", "dashboard"]]);
   });
 });

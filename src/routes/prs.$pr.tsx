@@ -4,7 +4,8 @@ import { ExternalLinkIcon, GitMergeIcon, MessageSquareIcon, XCircleIcon } from "
 import { useState } from "react";
 import { ConfirmDialog } from "@/components/confirm";
 import { DiffViewer } from "@/components/diff-viewer";
-import { ChecksBadge, Pill, PrStateBadge, RelativeTime, ReviewBadge } from "@/components/domain";
+import { ChecksBadge, MethodPill, Mono, Pill, PrStateBadge, RelativeTime, ReviewBadge } from "@/components/domain";
+import { Markdown } from "@/components/markdown";
 import { FilterField, SwitchRow } from "@/components/filters/field";
 import { IconButton } from "@/components/icon-button";
 import { NewRunButton } from "@/components/new-run";
@@ -13,13 +14,15 @@ import { RowList } from "@/components/rows";
 import { EmptyState, ErrorState, PageSkeleton } from "@/components/states";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ScrollTabsList } from "@/components/scroll-tabs";
+import { Tabs, TabsContent, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { parsePullRequestId } from "@/lib/api/adapters";
+import { parsePullRequestId } from "@/lib/api/ids";
 import { closePullRequest, commentPullRequest, mergePullRequest } from "@/lib/api/client";
 import type { MergeMethod, PullRequestDetail } from "@/lib/api/types";
-import { repoName } from "@/lib/format";
+import { repoName, shortSha } from "@/lib/format";
+import { commitUrl } from "@/lib/provenance";
 import { q } from "@/lib/queries";
 import { prefetch, title } from "@/lib/route-helpers";
 import { prSearch, stripDefaults, validator } from "@/lib/search";
@@ -36,7 +39,7 @@ export const Route = createFileRoute("/prs/$pr")({
   component: PrPage,
 });
 
-const TABS = ["conversation", "files", "diff", "checks"] as const;
+const TABS = ["conversation", "commits", "files", "diff", "checks"] as const;
 
 function PrPage(): React.ReactNode {
   const { pr: id } = Route.useParams();
@@ -80,17 +83,40 @@ function PrPage(): React.ReactNode {
           <span className="font-mono text-xs break-all">{p.head} → {p.base}</span>
           <LocalBranchLink branchId={p.branchId} />
         </div>
+        {p.state === "merged" && (p.mergeCommitSha || (p.mergeMethod && p.mergeMethod !== "unknown")) && <MergedAs pr={p} />}
         {p.state === "open" && <PrActions pr={p} />}
-        <Tabs value={search.tab} onValueChange={setTab} className="gap-4">
-          <TabsList className="h-11 w-full md:h-9 md:w-auto">
+        <Tabs value={search.tab === "commits" && !p.commits ? "conversation" : search.tab} onValueChange={setTab} className="gap-4">
+          <ScrollTabsList>
             <TabsTrigger value="conversation" className="px-2 md:px-3">{m.prs.tabs.conversation}</TabsTrigger>
+            {p.commits && <TabsTrigger value="commits" className="px-2 md:px-3">{m.prs.tabs.commits} <span className="text-xs text-muted-foreground">{p.commits.length}</span></TabsTrigger>}
             <TabsTrigger value="files" className="px-2 md:px-3">{m.prs.tabs.files} <span className="text-xs text-muted-foreground">{p.files.length}</span></TabsTrigger>
             <TabsTrigger value="diff" className="px-2 md:px-3">{m.prs.tabs.diff}</TabsTrigger>
             <TabsTrigger value="checks" className="px-2 md:px-3">{m.prs.tabs.checks}</TabsTrigger>
-          </TabsList>
+          </ScrollTabsList>
           <TabsContent value="conversation" className="flex flex-col gap-4">
             <Conversation pr={p} />
           </TabsContent>
+          {p.commits && (
+            <TabsContent value="commits">
+              {p.commits.length ? (
+                <RowList>
+                  {p.commits.map((c) => {
+                    const url = commitUrl(p.repo, c.sha);
+                    return (
+                      <li key={c.sha} className="flex flex-col gap-0.5 px-3 py-2 text-sm">
+                        <span className="break-words">{c.subject}</span>
+                        <span className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+                          {url ? <a href={url} target="_blank" rel="noreferrer" className="font-mono underline-offset-4 hover:underline">{shortSha(c.sha)}</a> : <Mono>{shortSha(c.sha)}</Mono>}
+                          <span>{c.author}</span>
+                          <RelativeTime iso={c.at} />
+                        </span>
+                      </li>
+                    );
+                  })}
+                </RowList>
+              ) : <EmptyState>{m.prs.noCommits}</EmptyState>}
+            </TabsContent>
+          )}
           <TabsContent value="files">
             {p.files.length ? (
               <RowList>
@@ -127,6 +153,26 @@ function PrPage(): React.ReactNode {
         </Tabs>
       </div>
     </>
+  );
+}
+
+/** "Merged as abc1234 · Squash" with a link to the merge commit on the forge. */
+function MergedAs({ pr }: { pr: PullRequestDetail }): React.ReactNode {
+  const url = commitUrl(pr.repo, pr.mergeCommitSha);
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-sm">
+      {pr.mergeCommitSha && (
+        <span className="flex items-center gap-1.5">
+          <span className="text-muted-foreground">{m.prs.mergedAs}</span>
+          {url ? (
+            <a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-mono text-xs underline-offset-4 hover:underline">
+              {shortSha(pr.mergeCommitSha)}<ExternalLinkIcon className="size-3" aria-hidden="true" />
+            </a>
+          ) : <Mono>{shortSha(pr.mergeCommitSha)}</Mono>}
+        </span>
+      )}
+      <MethodPill method={pr.mergeMethod} />
+    </div>
   );
 }
 
@@ -205,7 +251,7 @@ function Conversation({ pr }: { pr: PullRequestDetail }): React.ReactNode {
   return (
     <>
       <Card>
-        {pr.body.trim() ? <div className="text-sm break-words whitespace-pre-wrap">{pr.body}</div> : <p className="text-sm text-muted-foreground">{m.prs.noBody}</p>}
+        {pr.body.trim() ? <Markdown base={pr.url}>{pr.body}</Markdown> : <p className="text-sm text-muted-foreground">{m.prs.noBody}</p>}
       </Card>
       {timeline.length ? (
         <ul className="flex flex-col gap-2">
@@ -217,7 +263,7 @@ function Conversation({ pr }: { pr: PullRequestDetail }): React.ReactNode {
                   {t.kind === "review" && t.state && <Pill t={/approv/i.test(t.state) ? "good" : /change/i.test(t.state) ? "bad" : "neutral"}>{t.state.toLowerCase().replace(/_/g, " ")}</Pill>}
                   <RelativeTime iso={t.at} />
                 </span>
-                {t.body && <div className="text-sm break-words whitespace-pre-wrap">{t.body}</div>}
+                {t.body && <Markdown base={pr.url}>{t.body}</Markdown>}
               </Card>
             </li>
           ))}
