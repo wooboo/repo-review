@@ -4,6 +4,7 @@ import { useCallback, useMemo } from "react";
 import { Dot, verdictBg } from "@/components/domain";
 import { FilterField, SwitchRow } from "@/components/filters/field";
 import { FilterLayout, OptionSelect, Pagination, SearchInput } from "@/components/filters/controls";
+import { VisibilityFilters } from "@/components/filters/visibility";
 import { PageHeader } from "@/components/page-header";
 import { HistoryRow } from "@/components/provenance";
 import { BranchRow, divergenceMax, RowList, usePrsByBranch } from "@/components/rows";
@@ -15,7 +16,7 @@ import type { State } from "@/lib/api/types";
 import { repoName } from "@/lib/format";
 import { q } from "@/lib/queries";
 import { title } from "@/lib/route-helpers";
-import { BRANCH_FILTER_KEYS, branchSearch, stripDefaults, validator, type BranchSearch } from "@/lib/search";
+import { BRANCH_FILTER_KEYS, branchSearch, GONE_FILTER_KEYS, stripDefaults, validator, visibilityInput, type BranchSearch } from "@/lib/search";
 import { cn } from "@/lib/utils";
 import { VERDICTS } from "@/lib/verdicts";
 import { m } from "@/messages";
@@ -41,7 +42,9 @@ function Branches() {
   const dashboard = useQuery(q.dashboard());
   const jevEnabled = dashboard.data?.jevEnabled ?? false;
   const gone = search.view === "gone";
+  const visibility = visibilityInput(search);
   const input = {
+    ...visibility,
     text: search.q || undefined,
     verdicts: search.verdict,
     jev: search.jev || undefined,
@@ -56,12 +59,12 @@ function Branches() {
     pageSize: PAGE_SIZE,
   };
   const branches = useQuery({ ...q.branches(input), placeholderData: keepPreviousData, enabled: !gone });
-  const history = useQuery({ ...q.history({ text: search.q || undefined, repo: search.repo || undefined, gone: true, page: search.page, pageSize: PAGE_SIZE }), placeholderData: keepPreviousData, enabled: gone });
-  const prs = usePrsByBranch();
+  const history = useQuery({ ...q.history({ ...visibility, text: search.q || undefined, repo: search.repo || undefined, gone: true, page: search.page, pageSize: PAGE_SIZE }), placeholderData: keepPreviousData, enabled: gone });
+  const prs = usePrsByBranch(undefined, search.muted);
   const items = branches.data?.items ?? [];
   const goneItems = history.data?.items ?? [];
   const max = useMemo(() => divergenceMax(items), [items]);
-  const filterKeys = gone ? (["repo"] as const) : BRANCH_FILTER_KEYS;
+  const filterKeys = gone ? GONE_FILTER_KEYS : BRANCH_FILTER_KEYS;
   const activeCount = branchSearch.activeCount(search, filterKeys);
   const reset = () => update(Object.fromEntries(filterKeys.map((k) => [k, branchSearch.defaults[k]])) as Partial<BranchSearch>);
   const total = gone ? history.data?.total : branches.data?.total;
@@ -135,14 +138,15 @@ function Branches() {
 
 function Filters({ idPrefix: p, search, update, jevEnabled, gone }: { idPrefix: string; search: BranchSearch; update: (patch: Partial<BranchSearch>) => void; jevEnabled: boolean; gone: boolean }) {
   const settings = useQuery(q.settings());
-  const repos = useQuery(q.repos({ pageSize: 200 }));
+  const repos = useQuery(q.repos({ pageSize: 200, ...(search.muted ? { includeMuted: true } : {}) }));
   const repo = (
     <FilterField label={m.branches.repo} labelFor={p + "repo"}>
       <OptionSelect id={p + "repo"} value={search.repo} onChange={(repo) => update({ repo })} anyLabel={m.branches.allRepos}
         options={(repos.data?.items ?? []).map((r) => ({ value: r.key, label: repoName(r.key) })).sort((a, b) => a.label.localeCompare(b.label))} />
     </FilterField>
   );
-  if (gone) return repo;
+  const visibility = <VisibilityFilters owner={search.owner} muted={search.muted} onChange={update} />;
+  if (gone) return <>{repo}{visibility}</>;
   return (
     <>
       <FilterField label={m.branches.verdict}>
@@ -176,6 +180,7 @@ function Filters({ idPrefix: p, search, update, jevEnabled, gone }: { idPrefix: 
         <SwitchRow label={m.branches.dirty}><Switch checked={search.dirty} onCheckedChange={(dirty) => update({ dirty })} /></SwitchRow>
         <SwitchRow label={m.branches.localOnly}><Switch checked={search.localOnly} onCheckedChange={(localOnly) => update({ localOnly })} /></SwitchRow>
       </div>
+      {visibility}
     </>
   );
 }

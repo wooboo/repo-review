@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, type LinkProps } from "@tanstack/react-router";
-import { ChevronRightIcon, Trash2Icon } from "lucide-react";
+import { BellOffIcon, ChevronRightIcon, Trash2Icon } from "lucide-react";
 import { useMemo } from "react";
 import { useActionFlow } from "@/components/action-flow";
 import { DivergenceBar, RelativeTime, VerdictBadge } from "@/components/domain";
@@ -53,6 +53,15 @@ function Attention() {
             <Tile label={m.attention.openPrs} value={d?.openPullRequests} to="/prs" dot="bg-v-pr-open" />
             <Tile label={m.attention.running} value={d ? d.runningScans.length + d.runningAgentRuns : undefined} to="/agents" search={{ status: "running" }} className="col-span-2 sm:col-span-1" />
           </div>
+          {d && d.mutedRepositories > 0 && (
+            <p className="-mt-3 flex flex-wrap items-center gap-x-2 text-sm text-muted-foreground">
+              <BellOffIcon className="size-4" aria-hidden="true" />
+              {m.attention.mutedHidden(d.mutedRepositories)}
+              <Link to="/repos" search={{ muted: true }} className="inline-flex min-h-11 items-center font-medium text-foreground underline-offset-4 hover:underline md:min-h-0">
+                {m.attention.showMuted}
+              </Link>
+            </p>
+          )}
 
           <Button
             className="h-12 w-full text-base md:h-10 md:w-auto md:self-start md:text-sm"

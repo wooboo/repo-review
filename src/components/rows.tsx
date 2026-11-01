@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { ChevronDownIcon } from "lucide-react";
+import { BellOffIcon, ChevronDownIcon } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { ChecksBadge, DivergenceBar, FlagChips, LandedBadge, MethodPill, Mono, Pill, PrStateBadge, RelativeTime, ReviewBadge, ShaChips, VerdictBadge } from "@/components/domain";
@@ -20,8 +20,9 @@ export const divergenceMax = (rows: readonly BranchGroup[]) => Math.max(10, ...r
  * Pull requests by branch id (every page of the PR cache); empty when no forge is configured.
  * Grouped branches carry no PR reference in the read model, so the badge is joined here.
  */
-export function usePrsByBranch(repo?: string) {
-  const prs = useQuery(q.allPrs({ state: "all", repo }));
+export function usePrsByBranch(repo?: string, includeMuted?: boolean) {
+  // A repository's own pages reach it even when it is muted (direct access, Contract v4.1).
+  const prs = useQuery(q.allPrs({ state: "all", repo, ...(includeMuted || repo ? { includeMuted: true } : {}) }));
   return useMemo(() => {
     const map = new Map<string, PullRequest>();
     for (const p of prs.data ?? []) if (p.branchId && (!map.has(p.branchId) || p.state === "open")) map.set(p.branchId, p);
@@ -73,6 +74,7 @@ export function PrRow({ pr, showRepo = true }: { pr: PullRequest; showRepo?: boo
           {showRepo && <span className="font-medium text-foreground/80 break-all">{repoName(pr.repo)}</span>}
           <span className="break-all">{pr.head} → {pr.base}</span>
           <span>{m.prs.by(pr.author)}</span>
+          {!pr.mine && <ExternalMarker author={pr.author} />}
           <RelativeTime iso={pr.updatedAt} />
         </span>
         {(pr.checks.state !== "none" || pr.review !== "none" || (pr.state === "merged" && pr.mergeMethod && pr.mergeMethod !== "unknown")) && (
@@ -84,6 +86,25 @@ export function PrRow({ pr, showRepo = true }: { pr: PullRequest; showRepo?: boo
         )}
       </Link>
     </li>
+  );
+}
+
+/** Subtle marker of a PR author or repository owner that is not one of your accounts. */
+export function ExternalMarker({ author, owner }: { author?: string; owner?: string }) {
+  return (
+    <span className="rounded border border-dashed px-1 text-[11px] leading-4" title={owner ? m.visibility.notMineHelp(owner) : m.visibility.externalHelp(author ?? "")}>
+      {m.visibility.external}
+    </span>
+  );
+}
+
+/** Muted badge of a repository. */
+export function MutedBadge({ className }: { className?: string }) {
+  return (
+    <Pill className={className} title={m.mute.help}>
+      <BellOffIcon className="size-3" aria-hidden="true" />
+      {m.visibility.muted}
+    </Pill>
   );
 }
 

@@ -5,6 +5,7 @@ import { useCallback, useMemo } from "react";
 import { useActionFlow } from "@/components/action-flow";
 import { FilterField } from "@/components/filters/field";
 import { FilterLayout, OptionSelect, SearchInput } from "@/components/filters/controls";
+import { VisibilityFilters } from "@/components/filters/visibility";
 import { PageHeader, Section } from "@/components/page-header";
 import { WorktreeCard } from "@/components/rows";
 import { EmptyState, ErrorState, ListSkeleton } from "@/components/states";
@@ -16,7 +17,7 @@ import type { PlanInput, Verdict, WorktreeItem } from "@/lib/api/types";
 import { repoName } from "@/lib/format";
 import { q } from "@/lib/queries";
 import { title } from "@/lib/route-helpers";
-import { stripDefaults, validator, WORKTREE_FILTER_KEYS, worktreeSearch, type WorktreeSearch } from "@/lib/search";
+import { stripDefaults, validator, visibilityInput, WORKTREE_FILTER_KEYS, worktreeSearch, type WorktreeSearch } from "@/lib/search";
 import { canPrune, canSwitchToBase, clonePathOf, WORKTREE_STATUSES, worktreeStatus } from "@/lib/worktrees";
 import { m } from "@/messages";
 
@@ -34,10 +35,11 @@ function Worktrees() {
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
   const update = useCallback((patch: Partial<WorktreeSearch>, replace = false) => void navigate({ search: (prev) => ({ ...prev, ...patch }), replace }), [navigate]);
-  const rows = useQuery(q.worktrees({ host: search.host || undefined, repo: search.repo || undefined, text: search.q || undefined, dirty: search.status === "changes" ? true : search.status === "clean" ? false : undefined, missing: search.status === "missing" ? true : search.status === "clean" ? false : undefined }));
+  const visibility = visibilityInput(search);
+  const rows = useQuery(q.worktrees({ ...visibility, host: search.host || undefined, repo: search.repo || undefined, text: search.q || undefined, dirty: search.status === "changes" ? true : search.status === "clean" ? false : undefined, missing: search.status === "missing" ? true : search.status === "clean" ? false : undefined }));
   const settings = useQuery(q.settings());
-  const repos = useQuery(q.repos({ pageSize: 200 }));
-  const branches = useQuery(q.allBranches());
+  const repos = useQuery(q.repos({ pageSize: 200, ...(search.muted ? { includeMuted: true } : {}) }));
+  const branches = useQuery(q.allBranches(search.muted ? { includeMuted: true } : {}));
   const verdicts = useMemo(() => new Map((branches.data ?? []).map((b) => [b.id, b.verdict])), [branches.data]);
   const flow = useActionFlow();
   const client = useQueryClient();
@@ -90,7 +92,7 @@ function Worktrees() {
       <PageHeader title={m.worktrees.title} subtitle={rows.data ? m.results(groups.total) : undefined} />
       <FilterLayout
         activeCount={activeCount}
-        onReset={() => update({ host: "", repo: "", status: "" })}
+        onReset={() => update({ host: "", repo: "", status: "", owner: "all", muted: false })}
         toolbar={<SearchInput value={search.q} onChange={(v) => update({ q: v }, true)} placeholder={m.worktrees.searchPlaceholder} />}
         panel={(p) => (
           <>
@@ -111,6 +113,7 @@ function Worktrees() {
               <OptionSelect id={p + "host"} value={search.host} onChange={(host) => update({ host })} anyLabel={m.branches.allHosts}
                 options={(settings.data?.hosts ?? []).map((h) => ({ value: h.id, label: h.id }))} />
             </FilterField>
+            <VisibilityFilters owner={search.owner} muted={search.muted} onChange={update} />
           </>
         )}
       >
