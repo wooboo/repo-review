@@ -29,7 +29,7 @@ Single user, trusted network, no authentication (for now). English only.
 
 ## 2. Domain
 
-- **Host**: a machine to scan. `local` (the app's own machine) or `ssh` (an SSH target such as `minion`).
+- **Host**: a machine to scan. `local` (the app's own machine) or `ssh` (an SSH target such as `review-host`).
   Each host has scan roots (directories, editable in the app), an optional Bun path, enabled flag.
 - **Repository**: identity shared by all clones of the same project, keyed by the normalized URL of `origin`
   (`host/owner/repo`, lower case, no scheme, credentials or `.git`). A clone whose origin points elsewhere joins a
