@@ -120,12 +120,12 @@ export function makeApplication(path?: string) {
         verdict: verdict(
           flags,
           db
-            .list<{
-              repo: string;
-              head: string;
-              state: string;
-              headSha: string;
-            }>("pull_request")
+            .list<PullRequest>("pull_request")
+            .sort(
+              (a, b) =>
+                Number(b.state === "open") - Number(a.state === "open") ||
+                b.updatedAt.localeCompare(a.updatedAt),
+            )
             .find(
               (pr) =>
                 pr.repo === rows[0].clone.key &&
