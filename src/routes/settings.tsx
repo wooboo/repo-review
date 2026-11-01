@@ -17,7 +17,8 @@ import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from "@/com
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { updateSettings } from "@/lib/api/client";
-import type { Agent, Forge, Host, Settings } from "@/lib/api/types";
+import type { Agent, Forge, Host, SettingsUpdate, SettingsView } from "@/lib/api/types";
+import { editedForge, settingsUpdate } from "@/lib/settings";
 import { q } from "@/lib/queries";
 import { title } from "@/lib/route-helpers";
 import { m } from "@/messages";
@@ -32,10 +33,13 @@ const seg = "h-11 flex-1 px-2 md:h-8";
 function useSave() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (s: Settings) => updateSettings(s),
+    mutationFn: (s: SettingsUpdate) => updateSettings(s),
     onSuccess: (s) => {
       client.setQueryData(q.settings().queryKey, s);
       void client.invalidateQueries({ queryKey: ["agents"] });
+      // Jev availability and repository ownership both derive from settings.
+      void client.invalidateQueries({ queryKey: ["inv"] });
+      void client.invalidateQueries({ queryKey: ["prs"] });
     },
   });
 }
@@ -45,7 +49,6 @@ type Removing = { kind: "host" | "forge" | "agent"; index: number; name: string 
 
 function SettingsPage() {
   const settings = useQuery(q.settings());
-  const dashboard = useQuery(q.dashboard());
   const save = useSave();
   const [editing, setEditing] = useState<Editing>(null);
   const [removing, setRemoving] = useState<Removing>(null);
@@ -55,7 +58,7 @@ function SettingsPage() {
   const remove = () => {
     if (!removing) return;
     const without = <T,>(xs: readonly T[]) => xs.filter((_, i) => i !== removing.index);
-    save.mutate({ ...s, ...(removing.kind === "host" ? { hosts: without(s.hosts) } : removing.kind === "forge" ? { forges: without(s.forges) } : { agents: without(s.agents) }) });
+    save.mutate(settingsUpdate(s, removing.kind === "host" ? { hosts: without(s.hosts) } : removing.kind === "forge" ? { forges: without(s.forges) } : { agents: without(s.agents) }));
     setRemoving(null);
   };
   const addButton = (label: string, kind: "host" | "forge" | "agent") => (
@@ -86,6 +89,7 @@ function SettingsPage() {
               <span className="text-sm text-muted-foreground">
                 {m.settings.tokenSource}: {f.tokenCommand ? <Mono>{f.tokenCommand}</Mono> : f.tokenEnv ? <Mono>${f.tokenEnv}</Mono> : m.none}
               </span>
+              <span className="text-sm text-muted-foreground break-words">{m.settings.ownersList(f.owners ?? [])}</span>
             </ItemCard>
           )) : <p className="text-sm text-muted-foreground">{m.settings.noForges}</p>}
           <p className="text-xs text-muted-foreground">{m.settings.tokenNote}</p>
@@ -103,11 +107,7 @@ function SettingsPage() {
 
         <General settings={s} />
 
-        <Section title={m.settings.jev} id="jev">
-          <p className="flex items-center gap-2 text-sm">
-            {dashboard.data?.jevEnabled ? <><CheckIcon className="size-4 text-success" />{m.settings.jevOn}</> : <span className="text-muted-foreground">{m.settings.jevOff}</span>}
-          </p>
-        </Section>
+        <JevSection settings={s} />
       </div>
 
       <Sheet open={editing !== null} onOpenChange={(o) => !o && setEditing(null)}>
@@ -156,7 +156,7 @@ function FormShell({ title, children, onSave, saving, error, valid }: { title: s
 
 const replaceAt = <T,>(xs: readonly T[], index: number | null, value: T) => (index === null ? [...xs, value] : xs.map((x, i) => (i === index ? value : x)));
 
-function HostForm({ settings, index, onDone }: { settings: Settings; index: number | null; onDone: () => void }) {
+function HostForm({ settings, index, onDone }: { settings: SettingsView; index: number | null; onDone: () => void }) {
   const initial: Host = index === null ? { id: "", kind: "ssh", roots: ["~/Work"], enabled: true } : settings.hosts[index];
   const [id, setId] = useState(initial.id);
   const [kind, setKind] = useState(initial.kind);
@@ -170,7 +170,7 @@ function HostForm({ settings, index, onDone }: { settings: Settings; index: numb
   const host: Host = { id: id.trim(), kind, ...(kind === "ssh" ? { target: target.trim() } : {}), ...(bun.trim() ? { bun: bun.trim() } : {}), roots: roots.map((r) => r.trim()).filter(Boolean), enabled };
   return (
     <FormShell title={index === null ? m.settings.addHost : m.settings.editHost} valid={valid} saving={save.isPending} error={save.error}
-      onSave={() => save.mutate({ ...settings, hosts: replaceAt(settings.hosts, index, host) }, { onSuccess: onDone })}>
+      onSave={() => save.mutate(settingsUpdate(settings, { hosts: replaceAt(settings.hosts, index, host) }), { onSuccess: onDone })}>
       <FilterField label={m.settings.hostId} labelFor="host-id">
         <Input id="host-id" className="h-11 md:h-9" value={id} onChange={(e) => setId(e.target.value)} aria-invalid={duplicate || undefined} autoComplete="off" />
         {duplicate && <p className="text-xs text-destructive">{m.settings.duplicateHost}</p>}
@@ -197,18 +197,20 @@ function HostForm({ settings, index, onDone }: { settings: Settings; index: numb
   );
 }
 
-function ForgeForm({ settings, index, onDone }: { settings: Settings; index: number | null; onDone: () => void }) {
+function ForgeForm({ settings, index, onDone }: { settings: SettingsView; index: number | null; onDone: () => void }) {
   const initial: Forge = index === null ? { host: "", kind: "github", tokenCommand: "gh auth token" } : settings.forges[index];
+  const [owners, setOwners] = useState<string[]>([...(initial.owners ?? [])]);
   const [host, setHost] = useState(initial.host);
   const [kind, setKind] = useState(initial.kind);
   const [source, setSource] = useState<"env" | "command">(initial.tokenEnv && !initial.tokenCommand ? "env" : "command");
   const [value, setValue] = useState(initial.tokenCommand ?? initial.tokenEnv ?? "");
   const save = useSave();
   const valid = !!host.trim();
-  const forge: Forge = { host: host.trim().toLowerCase(), kind, ...(value.trim() ? (source === "env" ? { tokenEnv: value.trim() } : { tokenCommand: value.trim() }) : {}) };
+  // Keeps fields this form does not edit, such as the request reserve.
+  const forge = editedForge(index === null ? null : initial, { host, kind, source, token: value, owners });
   return (
     <FormShell title={index === null ? m.settings.addForge : m.settings.editForge} valid={valid} saving={save.isPending} error={save.error}
-      onSave={() => save.mutate({ ...settings, forges: replaceAt(settings.forges, index, forge) }, { onSuccess: onDone })}>
+      onSave={() => save.mutate(settingsUpdate(settings, { forges: replaceAt(settings.forges, index, forge) }), { onSuccess: onDone })}>
       <FilterField label={m.settings.forgeKind}>
         <ToggleGroup type="single" variant="outline" spacing={0} className="w-full" value={kind} onValueChange={(v) => { if (v === "github" || v === "forgejo") setKind(v); }}>
           <ToggleGroupItem value="github" className={seg}>{m.settings.forgeKinds.github}</ToggleGroupItem>
@@ -227,11 +229,15 @@ function ForgeForm({ settings, index, onDone }: { settings: Settings; index: num
           placeholder={source === "env" ? m.settings.tokenEnvPlaceholder : m.settings.tokenCommandPlaceholder} />
         <p className="text-xs text-muted-foreground">{m.settings.tokenNote}</p>
       </FilterField>
+      <FilterField label={m.settings.owners} labelFor="forge-owners">
+        <p id="forge-owners-hint" className="text-xs text-muted-foreground">{m.settings.ownersHint}</p>
+        <ListEditor id="forge-owners" values={owners} onChange={setOwners} placeholder={m.settings.ownerPlaceholder} addLabel={m.settings.addOwner} />
+      </FilterField>
     </FormShell>
   );
 }
 
-function AgentForm({ settings, index, onDone }: { settings: Settings; index: number | null; onDone: () => void }) {
+function AgentForm({ settings, index, onDone }: { settings: SettingsView; index: number | null; onDone: () => void }) {
   const initial: Agent = index === null ? { id: "", label: "", kind: "acp", command: "", args: [], models: [], defaultModel: "" } : settings.agents[index];
   const [id, setId] = useState(initial.id);
   const [label, setLabel] = useState(initial.label);
@@ -248,7 +254,7 @@ function AgentForm({ settings, index, onDone }: { settings: Settings; index: num
   const agent: Agent = { id: id.trim(), label: label.trim(), kind, command: command.trim(), args: args.filter((a) => a !== ""), models: cleanModels, defaultModel: effectiveDefault };
   return (
     <FormShell title={index === null ? m.settings.addAgent : m.settings.editAgent} valid={valid} saving={save.isPending} error={save.error}
-      onSave={() => save.mutate({ ...settings, agents: replaceAt(settings.agents, index, agent) }, { onSuccess: onDone })}>
+      onSave={() => save.mutate(settingsUpdate(settings, { agents: replaceAt(settings.agents, index, agent) }), { onSuccess: onDone })}>
       <FilterField label={m.settings.agentLabel} labelFor="agent-label">
         <Input id="agent-label" className="h-11 md:h-9" value={label} onChange={(e) => setLabel(e.target.value)} />
       </FilterField>
@@ -279,18 +285,19 @@ function AgentForm({ settings, index, onDone }: { settings: Settings; index: num
   );
 }
 
-function General({ settings }: { settings: Settings }) {
+function General({ settings }: { settings: SettingsView }) {
   const [time, setTime] = useState(settings.dailyScanTime);
   const [stale, setStale] = useState(String(settings.staleDays));
   const [dir, setDir] = useState(settings.worktreeDir);
+  const [archive, setArchive] = useState(settings.archiveDir ?? "");
   const save = useSave();
   const staleDays = Number(stale);
-  const valid = /^\d{2}:\d{2}$/.test(time) && Number.isInteger(staleDays) && staleDays > 0 && !!dir.trim();
-  const dirty = time !== settings.dailyScanTime || staleDays !== settings.staleDays || dir !== settings.worktreeDir;
+  const valid = /^\d{2}:\d{2}$/.test(time) && Number.isInteger(staleDays) && staleDays > 0 && !!dir.trim() && !!archive.trim();
+  const dirty = time !== settings.dailyScanTime || staleDays !== settings.staleDays || dir !== settings.worktreeDir || archive !== (settings.archiveDir ?? "");
   return (
     <Section title={m.settings.general} id="general">
       <Card>
-        <form className="flex flex-col gap-4" onSubmit={(e) => { e.preventDefault(); if (valid) save.mutate({ ...settings, dailyScanTime: time, staleDays, worktreeDir: dir.trim() }); }}>
+        <form className="flex flex-col gap-4" onSubmit={(e) => { e.preventDefault(); if (valid) save.mutate(settingsUpdate(settings, { dailyScanTime: time, staleDays, worktreeDir: dir.trim(), archiveDir: archive.trim() })); }}>
           <div className="grid gap-4 sm:grid-cols-2">
             <FilterField label={m.settings.dailyScan} labelFor="daily">
               <Input id="daily" type="time" className="h-11 md:h-9" value={time} onChange={(e) => setTime(e.target.value)} />
@@ -302,6 +309,10 @@ function General({ settings }: { settings: Settings }) {
           <FilterField label={m.settings.worktreeDir} labelFor="wtdir">
             <Input id="wtdir" className="h-11 font-mono md:h-9" value={dir} onChange={(e) => setDir(e.target.value)} />
           </FilterField>
+          <FilterField label={m.settings.archiveDir} labelFor="archivedir">
+            <Input id="archivedir" className="h-11 font-mono md:h-9" value={archive} onChange={(e) => setArchive(e.target.value)} aria-describedby="archivedir-hint" autoComplete="off" spellCheck={false} />
+            <p id="archivedir-hint" className="text-xs text-muted-foreground">{m.settings.archiveDirHint}</p>
+          </FilterField>
           <div className="flex items-center gap-3">
             <Button type="submit" className="h-11 md:h-9" disabled={!valid || !dirty || save.isPending}>
               {save.isPending ? <Loader2Icon className="animate-spin" /> : <CheckIcon />}{m.save}
@@ -311,6 +322,79 @@ function General({ settings }: { settings: Settings }) {
           {save.error && <ErrorState error={save.error} />}
         </form>
       </Card>
+    </Section>
+  );
+}
+
+/** Jev key: write-only. Saving sends `jev.apiKey`; removing sends null; other saves omit `jev`. */
+function JevSection({ settings }: { settings: SettingsView }) {
+  const jev = settings.jev;
+  const [key, setKey] = useState("");
+  const [command, setCommand] = useState(jev.apiKeyCommand ?? "");
+  const [removing, setRemoving] = useState(false);
+  const saveKey = useSave();
+  const saveCommand = useSave();
+  const stored = jev.source === "settings";
+  const commandDirty = command.trim() !== (jev.apiKeyCommand ?? "");
+  return (
+    <Section title={m.settings.jev} id="jev">
+      <Card className="flex flex-col gap-4">
+        <p className="flex items-center gap-2 text-sm" role="status">
+          {jev.apiKeySet ? <CheckIcon className="size-4 shrink-0 text-success" /> : null}
+          <span className={jev.apiKeySet ? "" : "text-muted-foreground"}>
+            {jev.apiKeySet ? m.settings.jevStatus(true, m.settings.jevSource[jev.source]) : m.settings.jevOff}
+          </span>
+        </p>
+        <form
+          className="flex flex-col gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!key.trim()) return;
+            saveKey.mutate(settingsUpdate(settings, {}, { apiKey: key.trim() }), { onSuccess: () => setKey("") });
+          }}
+        >
+          <FilterField label={m.settings.jevKey} labelFor="jev-key">
+            <Input id="jev-key" type="password" className="h-11 font-mono md:h-9" value={key} onChange={(e) => setKey(e.target.value)}
+              placeholder={stored ? m.settings.jevKeyPlaceholderSet : m.settings.jevKeyPlaceholder}
+              autoComplete="new-password" spellCheck={false} aria-describedby="jev-key-hint" />
+            <p id="jev-key-hint" className="text-xs text-muted-foreground">{m.settings.jevKeyHint}</p>
+          </FilterField>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="submit" className="h-11 md:h-9" disabled={!key.trim() || saveKey.isPending}>
+              {saveKey.isPending ? <Loader2Icon className="animate-spin" /> : <CheckIcon />}{m.settings.jevSaveKey}
+            </Button>
+            {stored && (
+              <Button type="button" variant="outline" className="h-11 text-destructive md:h-9" disabled={saveKey.isPending} onClick={() => setRemoving(true)}>
+                <Trash2Icon />{m.settings.jevRemoveKey}
+              </Button>
+            )}
+            {saveKey.isSuccess && !key && <span className="text-sm text-muted-foreground">{stored ? m.settings.jevKeySaved : m.settings.jevKeyRemoved}</span>}
+          </div>
+          {saveKey.error && <ErrorState error={saveKey.error} />}
+        </form>
+        <form
+          className="flex flex-col gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (commandDirty) saveCommand.mutate(settingsUpdate(settings, {}, { apiKeyCommand: command.trim() || null }));
+          }}
+        >
+          <FilterField label={m.settings.jevCommand} labelFor="jev-command">
+            <Input id="jev-command" className="h-11 font-mono md:h-9" value={command} onChange={(e) => setCommand(e.target.value)}
+              placeholder={m.settings.jevCommandPlaceholder} autoComplete="off" spellCheck={false} aria-describedby="jev-command-hint" />
+            <p id="jev-command-hint" className="text-xs text-muted-foreground">{m.settings.jevCommandHint}</p>
+          </FilterField>
+          <div className="flex items-center gap-3">
+            <Button type="submit" variant="outline" className="h-11 md:h-9" disabled={!commandDirty || saveCommand.isPending}>
+              {saveCommand.isPending ? <Loader2Icon className="animate-spin" /> : <CheckIcon />}{m.save}
+            </Button>
+            {saveCommand.isSuccess && !commandDirty && <span className="text-sm text-muted-foreground">{m.saved}</span>}
+          </div>
+          {saveCommand.error && <ErrorState error={saveCommand.error} />}
+        </form>
+      </Card>
+      <ConfirmDialog open={removing} onOpenChange={setRemoving} destructive title={m.settings.jevRemoveConfirm} description={m.settings.jevRemoveDescription}
+        confirm={m.settings.jevRemoveKey} onConfirm={() => { setRemoving(false); saveKey.mutate(settingsUpdate(settings, {}, { apiKey: null })); }} />
     </Section>
   );
 }
