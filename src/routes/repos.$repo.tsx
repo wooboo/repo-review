@@ -1,8 +1,10 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { ChevronDownIcon, EraserIcon, ExternalLinkIcon, FastForwardIcon, PencilIcon, UndoIcon } from "lucide-react";
+import { BellIcon, BellOffIcon, ChevronDownIcon, EraserIcon, ExternalLinkIcon, FastForwardIcon, PencilIcon, Trash2Icon, UndoIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useActionFlow } from "@/components/action-flow";
+import { useRepositoryDeletion, type DeletionClone } from "@/components/delete-repository";
+import { IconButton } from "@/components/icon-button";
 import { FilterField } from "@/components/filters/field";
 import { OptionSelect, Pagination } from "@/components/filters/controls";
 import { LandingRow } from "@/components/provenance";
@@ -14,13 +16,13 @@ import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetT
 import { Dot, KV, Mono, Pill, RelativeTime, verdictBg } from "@/components/domain";
 import { NewRunButton } from "@/components/new-run";
 import { Card, PageHeader, Section } from "@/components/page-header";
-import { BranchRow, divergenceMax, PrRow, RowList, usePrsByBranch, WorktreeCard } from "@/components/rows";
+import { BranchRow, divergenceMax, ExternalMarker, MutedBadge, PrRow, RowList, usePrsByBranch, WorktreeCard } from "@/components/rows";
 import { EmptyState, ErrorState, ListSkeleton, PageSkeleton } from "@/components/states";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Tabs, TabsContent, TabsTrigger } from "@/components/ui/tabs";
 import type { ActionTarget, Clone, PlanInput, RepositoryDetail, WorktreeItem } from "@/lib/api/types";
 import { parseStash, readmeSummary, repoName, repoOwner, shortSha, stripRemote } from "@/lib/format";
-import { q } from "@/lib/queries";
+import { q, useSetMuted } from "@/lib/queries";
 import { prefetch, title } from "@/lib/route-helpers";
 import { repoSearch, stripDefaults, validator, type RepoSearch } from "@/lib/search";
 import { cn } from "@/lib/utils";
@@ -42,28 +44,57 @@ const LANDINGS_PAGE = 30;
 function RepoPage(): React.ReactNode {
   const { repo: key } = Route.useParams();
   const search = Route.useSearch();
-  const { tab } = search;
-  const navigate = useNavigate({ from: Route.fullPath });
   const flow = useActionFlow();
+  const deletion = useRepositoryDeletion();
   const repo = useQuery(q.repo(key));
   const settings = useQuery(q.settings());
   const hasForge = settings.data?.forges.some((f) => key.startsWith(f.host + "/")) ?? false;
+  const r0 = repo.data;
   const header = (
     <PageHeader
       back="/repos"
       title={repoName(key)}
-      subtitle={repoOwner(key)}
-      actions={<NewRunButton target={{ repo: key, label: key }} />}
+      subtitle={
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span>{repoOwner(key)}</span>
+          {r0 && !r0.mine && r0.owner && <ExternalMarker owner={r0.owner} />}
+          {r0?.muted && <MutedBadge className="h-5" />}
+        </span>
+      }
+      actions={<>
+        {r0 && r0.clones.length > 0 && <MuteButton repositoryId={key} muted={r0.muted} />}
+        <NewRunButton target={{ repo: key, label: key }} />
+      </>}
     />
   );
-  if (repo.isPending) return <>{header}<PageSkeleton /></>;
-  if (repo.error) return <>{header}<ErrorState error={repo.error} onRetry={() => void repo.refetch()} /></>;
-  const r = repo.data;
-  if (!r.clones.length) return <>{header}<EmptyState>{m.notFound}</EmptyState></>;
-  const worktreeCount = r.clones.reduce((s, c) => s + c.worktrees.length, 0);
+  // One return with the sheets at fixed positions: a purge empties this page behind the open
+  // deletion sheet, which must keep its state (results, restore recipes) until it is closed.
   return (
     <>
       {header}
+      {repo.isPending ? (
+        <PageSkeleton />
+      ) : repo.error ? (
+        <ErrorState error={repo.error} onRetry={() => void repo.refetch()} />
+      ) : !repo.data.clones.length ? (
+        <EmptyState>{m.notFound}</EmptyState>
+      ) : (
+        <RepoTabs repo={repo.data} search={search} hasForge={hasForge} onPlan={flow.start}
+          onDelete={(cloneId) => deletion.start(key, repoName(key), repo.data.clones.map((c): DeletionClone => ({ id: c.id, host: c.host, path: c.path })), cloneId ? [cloneId] : null)} />
+      )}
+      {flow.sheet}
+      {deletion.sheet}
+    </>
+  );
+}
+
+function RepoTabs({ repo: r, search, hasForge, onPlan, onDelete }: { repo: RepositoryDetail; search: RepoSearch; hasForge: boolean; onPlan: (p: PlanInput) => void; onDelete: (cloneId?: string) => void }) {
+  const navigate = useNavigate({ from: Route.fullPath });
+  const key = r.key;
+  const { tab } = search;
+  const worktreeCount = r.clones.reduce((s, c) => s + c.worktrees.length, 0);
+  return (
+    <>
       <About repo={r} />
       <Tabs value={tab === "prs" && !hasForge ? "overview" : tab} onValueChange={(v) => { const t = TABS.find((x) => x === v); if (t) void navigate({ search: (p) => ({ ...p, tab: t, page: 1 }), replace: true }); }} className="mt-4 gap-4">
         <ScrollTabsList>
@@ -74,13 +105,13 @@ function RepoPage(): React.ReactNode {
           <TabsTrigger value="landings" className="px-2 md:px-3">{m.repos.tabs.landings}</TabsTrigger>
         </ScrollTabsList>
         <TabsContent value="overview" className="flex flex-col gap-6">
-          <Overview repo={r} onPlan={flow.start} />
+          <Overview repo={r} onPlan={onPlan} onDelete={onDelete} />
         </TabsContent>
         <TabsContent value="branches">
           <Branches repo={r} />
         </TabsContent>
         <TabsContent value="worktrees" className="flex flex-col gap-2">
-          <Worktrees repo={r} onPlan={flow.start} />
+          <Worktrees repo={r} onPlan={onPlan} />
         </TabsContent>
         {hasForge && (
           <TabsContent value="prs" className="flex flex-col gap-3">
@@ -92,8 +123,17 @@ function RepoPage(): React.ReactNode {
           {tab === "landings" && <Landings repo={r} search={search} update={(patch) => void navigate({ search: (p) => ({ ...p, ...patch }) })} />}
         </TabsContent>
       </Tabs>
-      {flow.sheet}
     </>
+  );
+}
+
+function MuteButton({ repositoryId, muted }: { repositoryId: string; muted: boolean }) {
+  const mute = useSetMuted();
+  const set = (next: boolean) => mute.mutate({ repositoryId, muted: next });
+  return (
+    <IconButton label={muted ? m.mute.unmuteRepo : m.mute.muteRepo} aria-pressed={muted} disabled={mute.isPending} onClick={() => set(!muted)}>
+      {muted ? <BellOffIcon /> : <BellIcon />}
+    </IconButton>
   );
 }
 
@@ -132,7 +172,7 @@ function Landings({ repo, search, update }: { repo: RepositoryDetail; search: Re
   const bases = [...new Set(repo.clones.flatMap((c) => c.bases.map(stripRemote)))].sort();
   const live = useMemo(() => new Set(repo.branches.map((b) => b.id)), [repo.branches]);
   const baseIds = useMemo(() => new Set(repo.branches.filter((b) => b.verdict === "base").map((b) => b.id)), [repo.branches]);
-  const landings = useQuery({ ...q.landings({ repo: repo.key, base: search.base || undefined, page: search.page, pageSize: LANDINGS_PAGE }), placeholderData: keepPreviousData });
+  const landings = useQuery({ ...q.landings({ repo: repo.key, includeMuted: true, base: search.base || undefined, page: search.page, pageSize: LANDINGS_PAGE }), placeholderData: keepPreviousData });
   return (
     <>
       {bases.length > 1 && (
@@ -195,7 +235,7 @@ function RemoteUrlSheet({ remote, targets, current, onClose, onPlan }: { remote:
   );
 }
 
-function Overview({ repo, onPlan }: { repo: RepositoryDetail; onPlan: (p: PlanInput) => void }) {
+function Overview({ repo, onPlan, onDelete }: { repo: RepositoryDetail; onPlan: (p: PlanInput) => void; onDelete: (cloneId?: string) => void }) {
   const [editRemote, setEditRemote] = useState<string | null>(null);
   const bases = [...new Set(repo.clones.flatMap((c) => c.bases))];
   const remotes = [...new Set(repo.clones.flatMap((c) => c.remotes.map((r) => r.name)))];
@@ -232,6 +272,9 @@ function Overview({ repo, onPlan }: { repo: RepositoryDetail; onPlan: (p: PlanIn
                     </Button>
                   </div>
                 ))}
+                <Button variant="ghost" size="sm" className="h-11 self-end text-destructive hover:text-destructive md:h-8" aria-label={m.repos.deleteCloneLabel(c.host, c.path)} onClick={() => onDelete(c.id)}>
+                  <Trash2Icon />{m.repos.deleteClone}
+                </Button>
               </Card>
             );
           })}
@@ -322,6 +365,15 @@ function Overview({ repo, onPlan }: { repo: RepositoryDetail; onPlan: (p: PlanIn
       )}
 
       <ForgeLink repo={repo.key} />
+
+      <Section title={m.repos.dangerZone} id="danger">
+        <Card className="flex flex-col gap-3 border-destructive/40 sm:flex-row sm:items-center sm:justify-between">
+          <p className="max-w-prose text-sm text-muted-foreground">{m.repos.dangerText}</p>
+          <Button variant="outline" className="h-11 shrink-0 border-destructive/50 text-destructive hover:bg-destructive/10 hover:text-destructive md:h-9" onClick={() => onDelete()}>
+            <Trash2Icon />{m.repos.deleteFromDisk}
+          </Button>
+        </Card>
+      </Section>
       {editRemote !== null && (
         <RemoteUrlSheet
           key={editRemote}
@@ -376,7 +428,7 @@ function Branches({ repo }: { repo: RepositoryDetail }) {
 }
 
 function Prs({ repo }: { repo: string }) {
-  const prs = useQuery(q.prs({ repo, state: "all", page: 1, pageSize: 50 }));
+  const prs = useQuery(q.prs({ repo, state: "all", includeMuted: true, page: 1, pageSize: 50 }));
   if (prs.isPending) return <ListSkeleton rows={3} />;
   if (prs.error) return <ErrorState error={prs.error} onRetry={() => void prs.refetch()} />;
   if (!prs.data.items.length) return <EmptyState>{m.prs.empty}</EmptyState>;
