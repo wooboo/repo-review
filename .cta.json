@@ -1,0 +1,20 @@
+{
+  "projectName": "repo-review",
+  "mode": "file-router",
+  "bundler": "vite",
+  "typescript": true,
+  "tailwind": true,
+  "packageManager": "bun",
+  "git": true,
+  "install": true,
+  "intent": false,
+  "addOnOptions": {},
+  "projectPreset": "default",
+  "routerOnly": false,
+  "includeExamples": false,
+  "version": 1,
+  "framework": "react",
+  "chosenAddOns": [
+    "nitro"
+  ]
+}
