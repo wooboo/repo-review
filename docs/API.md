@@ -395,3 +395,134 @@ pagination totals.
 
 Rate-limit behavior follows [GitHub GraphQL limits](https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api)
 and [REST best practices](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api).
+
+## Contract v4: Jev secrets and repository deletion
+
+This backend upgrade preserves settings and inventory. Migrations add
+`deleted_repositories`. Database files, existing WAL/SHM files and configured
+backups are restricted to mode 0600.
+
+### Settings
+
+`Settings` gains `jev?: { apiKey?: string; apiKeyCommand?: string }` and
+`archiveDir?: string`. Omission supports legacy settings; the settings view supplies
+archiveDir's default `~/.local/share/repo-review/archives`, expanded per host.
+`getSettings` / `get_settings` and settings updates return exported `SettingsView`:
+existing settings fields, with `jev` replaced by
+`{ apiKeySet: boolean; apiKeyCommand?: string; source: "settings" | "command" | "env" | "none" }`.
+No key is returned. `updateSettings` / new MCP `update_settings` accepts
+`jev?: { apiKey?: string | null; apiKeyCommand?: string | null }`:
+strings set, null clears, omission preserves each stored field. Unknown view fields
+are ignored, allowing read/edit-hosts/save without clearing credentials.
+`update_scan_roots` also returns the redacted view.
+
+Resolution: nonempty stored key → trimmed successful command output →
+`TYPESAFE_API_KEY` → disabled. Commands run asynchronously on the server, with a
+10-second timeout and 60-second cache. Failed/empty commands fall back to env.
+Dashboard availability and classification resolve the same key. Command stderr is
+discarded and classification errors are generic. There is no test_jev tool.
+
+### Planning and application
+
+`planRepositoryDeletion({ repositoryId, cloneIds?: string[] })` / MCP
+`plan_repository_deletion` returns job `{id}` →
+`{ actions: PlannedAction[], summary: RepositoryDeletionSummary }`.
+Poll `getBackgroundJob` / `get_job` as usual. Omit cloneIds to select all inventoried
+clones; IDs are host-and-path inventory clone IDs. Unknown/foreign IDs fail with
+`ActionError`. Each clone gets one `delete-clone` action. Generic planActions rejects
+this kind and directs callers to the dedicated planner.
+
+```ts
+type CloneDeletionSummary = {
+  actionId: string; host: string; path: string; sizeBytes: number | null;
+  linkedWorktrees: { path: string; branch: string | null; dirty: boolean; missing: boolean }[];
+  branches: number;
+  unpushedBranches: { name: string; ahead: number; integrated: boolean }[];
+  dirtyFiles: number; stashes: number;
+  ignoredKept: { files: number; bytes: number };
+  ignoredSkipped: { files: number; bytes: number };
+  activeThreads: { id: string; title: string }[];
+  blockers: string[];
+};
+type RepositoryDeletionSummary = {
+  repositoryId: string; name: string; clones: CloneDeletionSummary[];
+  remainingClones: number; purgesRepository: boolean; archiveDir: string;
+};
+```
+
+Schemas/types are exported from domain/model.ts. Size uses du, including external
+linked worktrees without double-counting nested paths. Dirty count deduplicates
+staged/modified/untracked paths per checkout. Unpushed branches are ahead of their
+upstream, or contain commits on no remote and are not integrated into the base.
+
+`applyActions({ ids: string[], confirm?: string })` / MCP `apply_actions` returns
+job `{id}` → `PlannedAction[]`. Every requested delete-clone action must have its
+repository display name equal confirm. Otherwise the **entire submission** fails
+with typed `DeletionConfirmationError` before starting a job or changing actions.
+Other invalid targets/plans use `ActionError`; host guards yield persisted `blocked`
+actions with a displayable reason.
+
+Planning/application run on the clone host through the existing local/SSH worker.
+Resolved clone paths must be strictly inside current host roots, never a root,
+home or `/`, equal Git's toplevel, and own the common Git directory. Linked
+worktrees must be strictly within host roots or the agent worktree directory.
+Archives must be outside every checkout. Fingerprints include all refs, stash
+list, porcelain status for all checkouts and the worktree list. Changes block
+application, including a second check after archiving. Queued/running agent runs,
+active T3 threads and process cwd inside any checkout block removal; unavailable
+T3/process verification also blocks it.
+
+### Mandatory archive and restore
+
+```text
+<archiveDir>/<sanitized repo name>/<UTC timestamp>-<sanitized host>-<action id>/
+  repo.bundle
+  info.json
+  worktrees/0.tar.gz
+  worktrees/0.staged.patch
+  worktrees/0.unstaged.patch
+  worktrees/1.tar.gz ...
+```
+
+The action suffix prevents same-host clone collisions. Checkout indices/paths are
+recorded in info.json. Nonempty binary patches are saved per checkout. Tar archives
+contain existing staged/modified/untracked files and ignored files ≤5 MiB outside
+`node_modules`, `.venv`, `venv`, `target`, `dist`, `build`, `.next`, `.nuxt`,
+`.turbo`, `.cache`, `__pycache__`, `.gradle`, `Pods`, `DerivedData`, `.direnv`.
+Deleted tracked files are recoverable from patches. Skipped ignored files are lost;
+info.json lists up to 2000 skipped paths, repository identity, remotes, branch SHAs,
+linked worktrees and timestamps. Git bundle --all includes stash and is verified.
+Ref-less repositories skip the bundle and record noRefs. Every produced archive
+file must exist and be nonempty before any removal. Archive failure leaves disk
+checkouts intact. External linked worktrees are recursively removed before the
+clone; forge-side repositories are never modified.
+
+Action restore text describes cloning repo.bundle, explicitly fetching refs/stash,
+recreating linked worktrees from info.json, extracting each tar and applying staged
+patches with git apply --index and unstaged patches with git apply. Ref-less repos
+use git init instead of clone.
+
+### Purge and tombstones
+
+After worker success, a SQLite transaction removes the clone and its cascading
+branch/worktree/file/remote/stash projections and clone history. Partial deletion
+keeps repository data. Final deletion also removes repositories, branches, history,
+PRs and PR commits, commit-list caches, landings/provenance, descriptions,
+classifications, sync watermarks, agent runs/events. Agent worktrees are Git linked
+worktrees; no separate record table exists. In-memory forge ETags are invalidated.
+Forge budgets and action audit records remain.
+
+`listDeletedRepositories()` / MCP `list_deleted_repositories` takes no input and
+returns `{ id, name, deletedAt, clones: { host, path, archivePath }[] }[]`.
+Partial deletion archives accumulate in the tombstone. Tombstones never suppress
+rediscovery. Purge emits coalesced SSE invalidations for inventory, pull-requests,
+actions and repositories.
+
+### Forgejo deleted heads
+
+Recovery prefers head.ref, head_branch, head.label (without owner prefix), merge
+commit message, then a unique branch_history name matching the head SHA. Ambiguous
+history preserves refs/pull/N/head. When metadata/history cannot recover the name,
+sync/detail requests the merge commit using the read-only Git commit endpoint.
+A sanitized fixture covers recovery; live verification needs the operator's
+configured endpoint and credentials.

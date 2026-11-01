@@ -36,11 +36,42 @@ export function checkState(v: unknown): ChecksSummary["state"] {
         ? "pending"
         : "none";
 }
+export function recoverHeadBranch(
+  value: unknown,
+  history: readonly { branch: string; sha: string }[] = [],
+): string {
+  const p = obj(value),
+    head = obj(p.head);
+  const usable = (s: string) =>
+    Boolean(s && !/^refs\/pull\/\d+\/head$/.test(s));
+  const ref = str(head.ref);
+  if (usable(ref)) return ref;
+  const direct = str(p.head_branch);
+  if (usable(direct)) return direct;
+  const label = str(head.label);
+  const labeledBranch = label.includes(":")
+    ? label.slice(label.indexOf(":") + 1)
+    : label;
+  if (usable(labeledBranch)) return labeledBranch;
+  const message =
+    str(p.merge_commit_message) || str(obj(obj(p.merge_commit).commit).message);
+  const from = /Merge pull request .*? from (.+?) into [^\n]+/.exec(
+    message,
+  )?.[1];
+  if (from) return from;
+  const candidates = [
+    ...new Set(
+      history.filter((h) => h.sha === str(head.sha)).map((h) => h.branch),
+    ),
+  ];
+  return candidates.length === 1 ? candidates[0] : ref;
+}
 export function normalizePullRequest(
   repo: string,
   forge: "github" | "forgejo",
   value: unknown,
   known = false,
+  history: readonly { branch: string; sha: string }[] = [],
 ): PullRequest {
   const p = obj(value),
     head = obj(p.head),
@@ -61,10 +92,10 @@ export function normalizePullRequest(
           ? "open"
           : "closed",
     draft: Boolean(p.draft),
-    head: str(head.ref),
+    head: recoverHeadBranch(p, history),
     headSha: str(head.sha),
     base: str(base.ref),
-    branchId: known ? `${repo}#${str(head.ref)}` : null,
+    branchId: known ? `${repo}#${recoverHeadBranch(p, history)}` : null,
     createdAt: str(p.created_at),
     updatedAt: str(p.updated_at),
     mergedAt: p.merged_at ?? null,
@@ -177,12 +208,38 @@ export async function getPullRequest(
     path = `${root}/pulls/${number}`;
   try {
     const raw = obj(rawPull ?? (await service.request(host, path)));
-    const pr = normalizePullRequest(
+    let pr = normalizePullRequest(
       repo,
       forge.kind,
       raw,
-      !!app.getBranch(`${repo}#${str(obj(raw.head).ref)}`),
+      !!app.getBranch(`${repo}#${recoverHeadBranch(raw)}`),
+      app.db
+        .list<import("../domain/model").BranchHistoryItem>("branch_history")
+        .filter((h) => h.repo === repo),
     );
+    if (
+      forge.kind === "forgejo" &&
+      /^refs\/pull\/\d+\/head$/.test(recoverHeadBranch(raw)) &&
+      pr.mergeCommitSha
+    ) {
+      try {
+        const commit = await service.request(
+          host,
+          root + "/git/commits/" + pr.mergeCommitSha,
+        );
+        const recovered = recoverHeadBranch({ ...raw, merge_commit: commit });
+        if (recovered && !/^refs\/pull\/\d+\/head$/.test(recovered))
+          pr = {
+            ...pr,
+            head: recovered,
+            branchId: app.getBranch(repo + "#" + recovered)
+              ? repo + "#" + recovered
+              : null,
+          };
+      } catch (e) {
+        if (!(e instanceof NotFound)) throw e;
+      }
+    }
     const pages = async (p: string, required = false) => {
       const rows: unknown[] = [];
       for (let page = 1; ; page++) {
@@ -374,7 +431,12 @@ async function sync(app: ApplicationApi, repo?: string, full = false) {
             key,
             forge.kind,
             p,
-            localBranches.has(`${key}#${str(obj(p.head).ref)}`),
+            localBranches.has(`${key}#${recoverHeadBranch(p)}`),
+            app.db
+              .list<import("../domain/model").BranchHistoryItem>(
+                "branch_history",
+              )
+              .filter((h) => h.repo === key),
           );
         const eligible =
           (pr.state === "open" || pr.state === "merged") &&
