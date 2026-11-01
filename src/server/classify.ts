@@ -1,3 +1,4 @@
+import { resolveJevKey } from "./jev-key";
 import { Schema } from "effect";
 import { JevClassification } from "../domain/model";
 import { spawn } from "node:child_process";
@@ -68,8 +69,9 @@ export async function describe(app: ApplicationApi, key: string) {
   app.db.put("description", hash, { key, hash, value, about });
   return { key, hash, value, about };
 }
-export async function classify(app: ApplicationApi, id: string) {
-  if (!process.env.TYPESAFE_API_KEY) return { status: "disabled" };
+async function classifyResolved(app: ApplicationApi, id: string) {
+  const { key } = await resolveJevKey(app.settings());
+  if (!key) return { status: "disabled" };
   const branch = app.getBranch(id);
   if (!branch) throw Error("Branch missing");
   const state = {
@@ -106,7 +108,7 @@ export async function classify(app: ApplicationApi, id: string) {
   const response = await fetch("https://api.typesafe.ai/v1/systemone", {
     method: "POST",
     headers: {
-      Authorization: "Bearer " + process.env.TYPESAFE_API_KEY,
+      Authorization: "Bearer " + key,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -150,4 +152,12 @@ export async function classify(app: ApplicationApi, id: string) {
   });
   app.db.put("classification", hash, { id, hash, value });
   return { id, hash, value };
+}
+
+export async function classify(app: ApplicationApi, id: string) {
+  try {
+    return await classifyResolved(app, id);
+  } catch {
+    throw new Error("Classification failed");
+  }
 }

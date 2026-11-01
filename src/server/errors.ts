@@ -25,3 +25,7 @@ export class SettingsError extends Data.TaggedError("SettingsError")<{
   message: string;
 }> {}
 export class DbError extends Data.TaggedError("DbError")<{ message: string }> {}
+
+export class DeletionConfirmationError extends Data.TaggedError(
+  "DeletionConfirmationError",
+)<{ message: string }> {}

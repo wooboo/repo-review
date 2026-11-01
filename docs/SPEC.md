@@ -213,3 +213,18 @@ worktree directory for hosts with different filesystem layouts. Description and
 Jev integrations validate their structured results, but live Jev calibration still
 requires an API key. The UI
 remains separately owned and is not part of this backend change.
+
+## Contract v4
+
+See API.md Contract v4 for full backend shapes and semantics. Jev credentials can
+come from settings, a server-side command or the environment; API/MCP settings
+views redact the key. Database/backup files are private.
+
+Repository removal uses named confirmation, read-only planning, host containment,
+fingerprint and activity checks, then mandatory verified bundle/dirty-file archive
+before removing linked worktrees and the clone. Partial removal retains repository
+data; final removal purges caches/history while retaining action audit and a
+tombstone that does not prevent rediscovery. The forge repository is never deleted.
+Archives default to host-relative `~/.local/share/repo-review/archives`.
+MCP adds `update_settings`, `plan_repository_deletion`, `list_deleted_repositories`;
+`apply_actions` accepts confirm.

@@ -1,5 +1,12 @@
 export type Change = {
-  type: "scan" | "job" | "agent-run" | "inventory" | "pull-requests";
+  type:
+    | "scan"
+    | "job"
+    | "agent-run"
+    | "inventory"
+    | "pull-requests"
+    | "actions"
+    | "repositories";
   id: string;
 };
 const listeners = new Set<(event: Change) => void>();

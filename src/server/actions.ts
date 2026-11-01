@@ -1,3 +1,4 @@
+import { DeletionConfirmationError } from "./errors";
 import { ActionError } from "./errors";
 import type { ApplicationApi } from "./application";
 import { Schema } from "effect";
@@ -8,6 +9,10 @@ export async function planActions(
   app: ApplicationApi,
   input: typeof PlanActionsInput.Type,
 ) {
+  if (input.kind === "delete-clone")
+    throw new ActionError({
+      message: "Use planRepositoryDeletion for clone deletion",
+    });
   const branches = input.branchIds
     ? input.branchIds.map((id) => {
         const b = app.getBranch(id);
@@ -104,6 +109,21 @@ export async function runPlanned(
   action: WorkerAction,
   apply: boolean,
 ): Promise<PlannedAction> {
+  if (apply && action.cloneDeletion) {
+    const settings = app.settings();
+    const host = settings.hosts.find((h) => h.id === action.target.host);
+    if (!host) throw new ActionError({ message: "Host missing" });
+    action = {
+      ...action,
+      cloneDeletion: {
+        ...action.cloneDeletion,
+        roots: host.roots,
+        worktreeDir: settings.worktreeDir,
+        archiveDir:
+          settings.archiveDir ?? "~/.local/share/repo-review/archives",
+      },
+    };
+  }
   const host = app.settings().hosts.find((h) => h.id === action.target.host);
   if (!host) throw new ActionError({ message: "Host missing" });
   const active = app.db
@@ -111,7 +131,7 @@ export async function runPlanned(
     .some(
       (r) =>
         r.repo === action.repoKey &&
-        r.status === "running" &&
+        (r.status === "running" || r.status === "queued") &&
         (!action.branchId || r.branchId === action.branchId),
     );
   if (active) {
@@ -149,7 +169,7 @@ export async function runPlanned(
       },
     };
   }
-  let result: PlannedAction | undefined;
+  let result: WorkerAction | undefined;
   await runHost(
     host,
     "worker",
@@ -160,18 +180,35 @@ export async function runPlanned(
     ],
     (event) => {
       const e = event as { type: string; result: unknown };
-      if (e.type === "action")
-        result = Schema.decodeUnknownSync(PlannedAction)(e.result);
+      if (e.type === "action") {
+        Schema.decodeUnknownSync(PlannedAction)(e.result);
+        result = e.result as WorkerAction;
+      }
     },
   );
   if (!result) throw new ActionError({ message: "Worker returned no result" });
   app.db.put("action", action.id, { ...action, ...result });
-  return result;
+  if (apply && result.status === "done" && result.cloneDeletion?.archivePath) {
+    app.db.purgeClone(
+      result.repoKey,
+      result.cloneDeletion.cloneId,
+      {
+        host: result.target.host,
+        path: result.target.repo,
+        archivePath: result.cloneDeletion.archivePath,
+      },
+      result.cloneDeletion.name,
+    );
+    app.forge().forgetRepository(result.repoKey);
+  }
+  return Schema.decodeUnknownSync(PlannedAction)(result);
 }
 export async function applyActions(
   app: ApplicationApi,
   ids: readonly string[],
+  confirm?: string,
 ) {
+  validateDeletionConfirmation(app, ids, confirm);
   const result: PlannedAction[] = [];
   for (const id of ids) {
     const action = app.db.get<WorkerAction>("action", id);
@@ -206,4 +243,98 @@ export async function applyActions(
     }
   }
   return result;
+}
+
+export function validateDeletionConfirmation(
+  app: ApplicationApi,
+  ids: readonly string[],
+  confirm?: string,
+) {
+  for (const id of ids) {
+    const action = app.db.get<WorkerAction>("action", id);
+    if (
+      action?.kind === "delete-clone" &&
+      (!action.cloneDeletion || confirm !== action.cloneDeletion.name)
+    )
+      throw new DeletionConfirmationError({
+        message: "Confirmation must equal the repository display name",
+      });
+  }
+}
+export async function planRepositoryDeletion(
+  app: ApplicationApi,
+  input: { repositoryId: string; cloneIds?: readonly string[] },
+) {
+  const clones = app.db
+    .list<import("./application").StoredClone>("clone")
+    .filter((c) => c.key === input.repositoryId);
+  if (!clones.length) throw new ActionError({ message: "Repository missing" });
+  if (input.cloneIds?.some((id) => !clones.some((c) => c.id === id)))
+    throw new ActionError({ message: "Clone does not belong to repository" });
+  const chosen = clones.filter(
+    (c) => !input.cloneIds || input.cloneIds.includes(c.id),
+  );
+  const name = clones[0].name;
+  const settings = app.settings();
+  const archiveDir =
+    settings.archiveDir ?? "~/.local/share/repo-review/archives";
+  const actions: PlannedAction[] = [];
+  const summaries: import("../domain/model").CloneDeletionSummary[] = [];
+  for (const c of chosen) {
+    const host = settings.hosts.find((h) => h.id === c.host);
+    if (!host) throw new ActionError({ message: "Host missing" });
+    const action: WorkerAction = {
+      id: crypto.randomUUID(),
+      kind: "delete-clone",
+      target: { host: c.host, repo: c.path },
+      branchId: null,
+      repoKey: c.key,
+      status: "planned",
+      reason: "",
+      restore: null,
+      createdAt: new Date().toISOString(),
+      finishedAt: null,
+      sha: "",
+      base: "",
+      baseSha: "",
+      remoteUrl: "",
+      cloneDeletion: {
+        cloneId: c.id,
+        name,
+        roots: host.roots,
+        worktreeDir: settings.worktreeDir,
+        archiveDir,
+      },
+    };
+    actions.push(await runPlanned(app, action, false));
+    const stored = app.db.get<WorkerAction>("action", action.id)!;
+    summaries.push(
+      stored.cloneDeletion?.summary ?? {
+        actionId: action.id,
+        host: c.host,
+        path: c.path,
+        sizeBytes: null,
+        linkedWorktrees: [],
+        branches: 0,
+        unpushedBranches: [],
+        dirtyFiles: 0,
+        stashes: 0,
+        ignoredKept: { files: 0, bytes: 0 },
+        ignoredSkipped: { files: 0, bytes: 0 },
+        activeThreads: [],
+        blockers: [stored.reason],
+      },
+    );
+  }
+  return {
+    actions,
+    summary: {
+      repositoryId: input.repositoryId,
+      name,
+      clones: summaries,
+      remainingClones: clones.length - chosen.length,
+      purgesRepository: chosen.length === clones.length,
+      archiveDir,
+    },
+  };
 }
