@@ -58,14 +58,43 @@ export const Agent = Schema.Struct({
   defaultModel: Schema.String,
 });
 export type Agent = typeof Agent.Type;
-export const Settings = Schema.Struct({
+const settingsFields = {
   hosts: Schema.Array(Host),
   forges: Schema.Array(Forge),
   agents: Schema.Array(Agent),
   staleDays: Schema.Number,
   worktreeDir: Schema.String,
   dailyScanTime: Schema.String,
+  archiveDir: Schema.optional(Schema.String),
+};
+export const Settings = Schema.Struct({
+  ...settingsFields,
+  jev: Schema.optional(
+    Schema.Struct({
+      apiKey: Schema.optional(Schema.String),
+      apiKeyCommand: Schema.optional(Schema.String),
+    }),
+  ),
 });
+export const SettingsUpdate = Schema.Struct({
+  ...settingsFields,
+  jev: Schema.optional(
+    Schema.Struct({
+      apiKey: Schema.optional(Schema.NullOr(Schema.String)),
+      apiKeyCommand: Schema.optional(Schema.NullOr(Schema.String)),
+    }),
+  ),
+});
+export type SettingsUpdate = typeof SettingsUpdate.Type;
+export const SettingsView = Schema.Struct({
+  ...settingsFields,
+  jev: Schema.Struct({
+    apiKeySet: Schema.Boolean,
+    apiKeyCommand: Schema.optional(Schema.String),
+    source: Schema.Literals(["settings", "command", "env", "none"]),
+  }),
+});
+export type SettingsView = typeof SettingsView.Type;
 export type Settings = typeof Settings.Type;
 export const Thread = Schema.Struct({
   id: Schema.String,
@@ -418,6 +447,7 @@ export const MergePullRequestInput = Schema.Struct({
   deleteRemoteBranch: Schema.Boolean,
 });
 export const ActionKind = Schema.Literals([
+  "delete-clone",
   "delete-branch",
   "archive-and-delete",
   "switch-to-base",
@@ -565,3 +595,65 @@ export const SyncPullRequestsInput = Schema.Struct({
   repo: Schema.optional(Schema.String),
   full: Schema.optional(Schema.Boolean),
 });
+
+export const RepositoryDeletionInput = Schema.Struct({
+  repositoryId: Schema.String,
+  cloneIds: Schema.optional(Schema.Array(Schema.String)),
+});
+export const ApplyActionsInput = Schema.Struct({
+  ids: Schema.Array(Schema.String),
+  confirm: Schema.optional(Schema.String),
+});
+export const CloneDeletionSummary = Schema.Struct({
+  actionId: Schema.String,
+  host: Schema.String,
+  path: Schema.String,
+  sizeBytes: Schema.NullOr(Schema.Number),
+  linkedWorktrees: Schema.Array(
+    Schema.Struct({
+      path: Schema.String,
+      branch: Schema.NullOr(Schema.String),
+      dirty: Schema.Boolean,
+      missing: Schema.Boolean,
+    }),
+  ),
+  branches: Schema.Number,
+  unpushedBranches: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      ahead: Schema.Number,
+      integrated: Schema.Boolean,
+    }),
+  ),
+  dirtyFiles: Schema.Number,
+  stashes: Schema.Number,
+  ignoredKept: Schema.Struct({ files: Schema.Number, bytes: Schema.Number }),
+  ignoredSkipped: Schema.Struct({ files: Schema.Number, bytes: Schema.Number }),
+  activeThreads: Schema.Array(
+    Schema.Struct({ id: Schema.String, title: Schema.String }),
+  ),
+  blockers: Schema.Array(Schema.String),
+});
+export type CloneDeletionSummary = typeof CloneDeletionSummary.Type;
+export const RepositoryDeletionSummary = Schema.Struct({
+  repositoryId: Schema.String,
+  name: Schema.String,
+  clones: Schema.Array(CloneDeletionSummary),
+  remainingClones: Schema.Number,
+  purgesRepository: Schema.Boolean,
+  archiveDir: Schema.String,
+});
+export type RepositoryDeletionSummary = typeof RepositoryDeletionSummary.Type;
+export const DeletedRepository = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  deletedAt: Schema.String,
+  clones: Schema.Array(
+    Schema.Struct({
+      host: Schema.String,
+      path: Schema.String,
+      archivePath: Schema.String,
+    }),
+  ),
+});
+export type DeletedRepository = typeof DeletedRepository.Type;
