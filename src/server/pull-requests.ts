@@ -314,14 +314,34 @@ export async function createPullRequest(
 ) {
   const branch = app.getBranch(input.branchId);
   if (!branch) throw new NotFound({ message: "Branch missing" });
-  const clone = branch.clones.find(
-    (c) => !input.cloneHost || c.host === input.cloneHost,
-  );
-  if (!clone) throw new NotFound({ message: "Clone missing" });
+  const repository = app.getRepository(branch.repo);
+  const selected = branch.clones
+    .filter((c) => !input.cloneHost || c.host === input.cloneHost)
+    .map((c) => ({
+      branch: c,
+      remote: repository.clones
+        .find((r) => r.host === c.host && r.path === c.path)
+        ?.remotes.find((r) => r.key === branch.repo),
+    }))
+    .find((c) => c.remote);
+  if (!selected?.remote)
+    throw new ForgeRejected({
+      message:
+        "No selected clone has a configured remote for this forge repository",
+    });
+  const clone = selected.branch,
+    remote = selected.remote;
   // The worker rechecks the captured local SHA and the selected remote before pushing.
   const plan = await app.planActions({
     kind: "push-branch",
-    targets: [{ host: clone.host, repo: clone.path, branch: branch.name }],
+    targets: [
+      {
+        host: clone.host,
+        repo: clone.path,
+        branch: branch.name,
+        remote: remote.name,
+      },
+    ],
   });
   if (plan.some((p) => p.status !== "planned"))
     throw new ForgeRejected({ message: plan.map((p) => p.reason).join("; ") });

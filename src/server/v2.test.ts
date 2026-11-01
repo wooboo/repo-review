@@ -435,3 +435,52 @@ test("foundation migration preserves settings and invalidates old plans", async 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("forge refresh normalizes summaries without downloading diffs", async () => {
+  const { ForgeService } = await import("./forge");
+  for (const kind of ["github", "forgejo"] as const) {
+    const app = makeApplication(":memory:"),
+      calls: string[] = [];
+    const fixture = kind === "github" ? githubFixture : forgejoFixture;
+    class RecordedForge extends ForgeService {
+      override async request(
+        _host: string,
+        path: string,
+        _method = "GET",
+        _body?: unknown,
+        raw = false,
+      ): Promise<unknown> {
+        calls.push(path);
+        if (raw) return "diff";
+        if (path.includes("/actions/runs")) return { workflow_runs: [] };
+        if (path.includes("check-runs")) return { check_runs: [] };
+        if (path.includes("/statuses"))
+          return [{ context: "ci", state: "success" }];
+        if (path.includes("/reviews"))
+          return [{ user: { login: "reviewer" }, state: "APPROVED" }];
+        if (path.includes("/files") || path.includes("/comments")) return [];
+        if (path.includes("pulls?")) return [fixture];
+        return fixture;
+      }
+    }
+    app.updateSettings({
+      ...app.settings(),
+      forges: [{ host: "forge.example", kind }],
+    });
+    app.forge = () => new RecordedForge(app.settings().forges);
+    try {
+      const values = await app.refreshPullRequests("forge.example/team/repo");
+      expect(values[0]?.checks.state).toBe("success");
+      expect(values[0]?.review).toBe("approved");
+      expect(
+        calls.some((c) => c.endsWith("/files") || c.endsWith(".diff")),
+      ).toBe(false);
+      expect(app.listPullRequests({ state: "all" }).total).toBe(1);
+      expect(
+        (await app.getPullRequest("forge.example/team/repo!7"))?.diff,
+      ).toBe("diff");
+    } finally {
+      await app.close();
+    }
+  }
+});
