@@ -229,3 +229,69 @@ flags: string[] } | null` (null when Jev is disabled or not run). `getDashboard`
 
 `GET /api/events` (SSE) emits `{ type: "scan" | "job" | "agent-run" | "inventory", id }` when something changes,
 so the UI can invalidate queries; polling every 2 s remains a valid fallback.
+
+## Contract v3 (target): pull-request provenance and fixes
+
+Problem: after a squash merge the base only has one new commit, and nothing in git says which branch it came
+from. Patch-id matching fails when the PR got conflict resolutions, base merges or review fixes, and "PR merged
+with the same head" fails when the local branch is one commit behind or ahead of the PR's final head. v3 makes
+the app remember pull requests permanently and link branches ↔ PRs ↔ base commits.
+
+### Data the backend keeps
+
+- **Every PR of every configured repository, all states**, synced incrementally (by `updated_at`) and kept
+  after the forge branch is deleted: number, title, head ref, head SHA, base, state, `mergeCommitSha`,
+  merge method (`merge`/`squash`/`rebase`/`unknown`, inferred from the merge commit's parents and whether the
+  PR head is its ancestor), merged at, and the **list of all PR commit SHAs** (GitHub `GET /pulls/{n}/commits`,
+  Forgejo `GET /pulls/{n}/commits`). Stored in real columns/tables (`pull_requests` columns + `pull_request_commits
+  (pr_id, sha, position)`), not only JSON.
+- **Branch history** (`branch_history`): every (host, clone, branch, sha) seen by scans with first/last seen and
+  `goneAt`, so deleted branches remain explainable.
+- **Base commit provenance**: for base commits of the last 180 days, the PR that produced them, from
+  `mergeCommitSha`, else from the commit message (`(#N)` suffix, `Merge pull request '…' (#N) from <branch>`,
+  `Merge pull request #N from owner/branch`, `Merge branch '<branch>'`), else from `Source-Branch:`/`Source-PR:`
+  trailers, else patch-id (existing squash detection).
+
+### Linking rules (per clone, before the existing state rules decide "unmerged")
+
+1. The branch tip SHA is any commit of a **merged** PR (or its head SHA) → `landedVia = { pr, extraCommits: 0 }`,
+   state `pr-merged` (counts as integrated).
+2. Some PR commit is an ancestor of the tip and that PR is merged → `landedVia` with `extraCommits` = commits on
+   the branch after the newest such PR commit; verdict `pr-merged-changed` shows only those commits for review.
+3. Same rules for remote branches and for `branch_history` entries.
+
+### Read-model changes
+
+```ts
+type LandedVia = { pullRequestId: string; number: number; url: string; method: "merge" | "squash" | "rebase" | "unknown";
+  mergeCommitSha: string | null; matchedSha: string; extraCommits: number; extraCommitShas: string[] }
+// grouped branch: per-clone `landedVia: LandedVia | null`, and branch-level `landedVia` when all clones agree
+// PullRequest: + mergeCommitSha: string | null; mergeMethod: LandedVia["method"] | null; commitCount: number
+// PullRequestDetail: + commits: { sha: string; subject: string; author: string; at: string }[]
+type Landing = { sha: string; subject: string; author: string; at: string; base: string;
+  pullRequestId: string | null; number: number | null; sourceBranch: string | null;
+  method: LandedVia["method"] | "direct"; via: "merge-commit-sha" | "message" | "trailer" | "patch-id" | "none";
+  branchIds: string[] /* local branches (live or gone) that landed in this commit */ }
+type BranchHistoryItem = { host: string; repo: string; clonePath: string; branch: string; sha: string;
+  firstSeen: string; lastSeen: string; goneAt: string | null; landedVia: LandedVia | null }
+```
+
+| Function | Input | Result |
+|---|---|---|
+| `listLandings` | `{ repo, base?, since?, page, pageSize }` | page of `Landing` (newest first) |
+| `getCommitProvenance` | `{ repo, sha }` | `Landing \| null` |
+| `listBranchHistory` | `{ repo?, gone?: boolean, page, pageSize }` | page of `BranchHistoryItem` |
+| `syncPullRequests` | `{ repo? }` | job `{id}` (incremental; full when `repo` given and `full: true`) |
+
+`mergePullRequest` with `method: "squash"` (and `"merge"`) appends trailers to the commit message:
+`Source-Branch: <head ref>`, `Source-Head: <head sha>`, `Source-PR: <url>`, so provenance survives without the forge.
+MCP gains `list_landings`, `get_commit_provenance`, `list_branch_history`, `sync_pull_requests`.
+
+### Fixes required in v3
+
+- Forge tokens: resolve token commands asynchronously (`Bun.spawn`), cache per forge for 10 minutes; no
+  `spawnSync` on the request path. PR lists are served from the DB; forge fetches happen only in sync jobs.
+- Read models built once per request; no per-branch scans of all PR rows (index by repo + head ref + sha).
+- A missing worktree directory is `missing`, not `dirty`; dashboard "dirty worktrees" counts only real changes.
+- Queried fields are real columns: branches (verdict, state, last commit at, stale, dirty, local-only, repo,
+  name), pull_requests (repo, number, state, head ref, head sha, merge commit sha, base, updated at, merged at).
