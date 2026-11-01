@@ -154,6 +154,12 @@ const descriptions: Record<keyof typeof toolSchemas, string> = {
     "List persisted agent runs by repository key or status with paging. Does not launch agents or mutate disk or a forge.",
   get_settings:
     "Read configured hosts, forges, agents and scheduling settings. Token source names may be returned, but resolved forge tokens are never exposed; does not mutate disk or a forge.",
+  update_settings:
+    "Update application settings (hosts, forges, agents, schedule, archive directory, Jev key). Omitted Jev fields keep stored values and null clears them; returns the redacted settings view, never the key.",
+  plan_repository_deletion:
+    "Plan deleting a repository's clones from disk (all clones, or the given clone ids) and return a job id to poll with get_job. The result lists what would be lost per clone; nothing is removed until apply_actions runs with confirm equal to the repository name.",
+  list_deleted_repositories:
+    "List tombstones of repositories deleted from disk, with each clone's host, path and archive location. Reads the database only.",
   update_scan_roots:
     "Replace scan roots for a configured host id and persist the settings. Does not run a scan or change clone disk or a forge.",
 };
@@ -196,6 +202,36 @@ const fieldDescriptions: Record<string, string> = {
   since: "Earliest landing timestamp (ISO 8601); defaults to 180 days ago.",
   gone: "True selects disappeared branch tips; false selects currently observed tips.",
   sha: "Full commit SHA to look up in cached landing provenance.",
+  target: "SSH destination (alias or user@host) for an ssh host.",
+  bun: "Bun executable on the host used to run the collector and worker.",
+  enabled: "Whether the host is scanned and used for actions.",
+  forges: "Forge integrations (GitHub, Forgejo) used for PR sync and actions.",
+  requestReserve:
+    "Forge API requests to keep in reserve; sync pauses when the remaining budget reaches it.",
+  tokenEnv: "Server environment variable holding the forge token.",
+  tokenCommand:
+    "Shell command run on the server that prints the forge token; the token is never returned.",
+  owners:
+    "Forge account or organization logins treated as the user's own (case-insensitive).",
+  agents: "Agent launchers (ACP or CLI) available for agent runs.",
+  label: "Human-readable name shown in the UI.",
+  command: "Executable (and leading arguments) used to launch the agent.",
+  args: "Extra arguments; {model} and {prompt} placeholders are substituted for CLI agents.",
+  models: "Model ids the agent accepts.",
+  defaultModel: "Model id used when a run does not choose one.",
+  staleDays: "Days without commits after which a branch counts as stale.",
+  worktreeDir: "Directory where the app creates worktrees for agent runs.",
+  dailyScanTime: "Local time (HH:MM) of the daily scan.",
+  archiveDir:
+    "Directory, expanded per host, where clone archives are written before deletion.",
+  apiKey:
+    "Jev (TypeSafe) API key to store; null clears it, omission keeps the stored key.",
+  apiKeyCommand:
+    "Shell command printing the Jev API key; null clears it, omission keeps it.",
+  confirm:
+    "Repository display name; required to apply delete-clone actions, otherwise the whole call is rejected.",
+  cloneIds:
+    "Clone ids (host:absolute path) of the repository to delete; omit to select every clone.",
   fetch:
     "Fetch and prune remote refs during scanning when true; does not write to a forge.",
   branchId: "Exact grouped branch id: repositoryKey#branch.",

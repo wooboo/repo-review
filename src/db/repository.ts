@@ -448,6 +448,14 @@ export function openRepository(
               sqlite.query("DELETE FROM classifications WHERE id=?").run(r.id);
           }
           sqlite.query("DELETE FROM actions WHERE repo=? AND json_extract(json, '$.kind') != 'delete-clone'").run(repo);
+          // A purged repository leaves the mute list; if it reappears it starts visible.
+          const mutedKeys = muted();
+          if (mutedKeys.includes(repo))
+            api.put(
+              "settings",
+              "muted-repositories",
+              mutedKeys.filter((k) => k !== repo),
+            );
           const runIds = api
             .list<{ id: string; repo: string }>("agent")
             .filter((r) => r.repo === repo)
