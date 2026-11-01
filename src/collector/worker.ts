@@ -61,7 +61,11 @@ export function execute(
         .code
     )
       return result("blocked", "Base missing or rewritten");
-    if (item.state === "base" || item.branch===item.base.replace(/^(origin|upstream)\//,"")) return result("blocked", "Cannot delete base");
+    if (
+      item.state === "base" ||
+      item.branch === item.base.replace(/^(origin|upstream)\//, "")
+    )
+      return result("blocked", "Cannot delete base");
     const current = analyzeBranch(
       item.repo,
       item.branch,
