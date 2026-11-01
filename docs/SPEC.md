@@ -192,3 +192,49 @@ confirm. Every list has empty/loading (skeleton)/error states.
 Env: `PORT`, `DATABASE_PATH` (outside the repo), optional `MCP_TOKEN`, `TYPESAFE_API_KEY`, `GITHUB_TOKEN`.
 Run in production with `bun .output/server/index.mjs` as a systemd user service. Scheduled daily scan inside the
 server process. Backups: copy of the SQLite file (`VACUUM INTO`) daily.
+
+## Backend foundation implementation status
+
+The sections above remain the target product contract. This first backend branch
+implements an inventory/scan/cleanup foundation and a provisional UI contract
+in `API.md`. The following are deliberate implementation deviations, not changes
+to the target behavior:
+
+- Persistence currently uses a Drizzle `records` table with kind/id/host/JSON/updated
+  columns. Clones contain branches, worktrees, files, remotes and stashes; current
+  state replacement is atomic per host. This makes versioned host snapshots easy
+  to ingest without flattening them twice. The separate relational tables and
+  per-entity Schema codecs specified in §4 remain follow-up work before scaling.
+- Effect provides one application service with a shared scoped ManagedRuntime;
+  the application composes ordinary host/forge/agent modules. Dedicated Effect
+  layers and typed errors for each subsystem remain to be extracted for stronger
+  fault injection and narrower dependencies.
+- The worker supports integrated branch deletion and archive-before-delete.
+  Switch-to-base, detach-base, local fast-forward, safe missing-worktree pruning,
+  remote editing/renaming and explicit push operations are not implemented.
+  They are left unavailable rather than weakening their safety preconditions.
+- Collector analysis covers the merge-state sequence, divergence, contained refs,
+  worktree files, root commits, remotes, stashes, T3 links and basic about material.
+  Full date/activity/cherry metadata, extension inventory, explicit fetch timestamps,
+  bounded parallelism/`--jobs`, and a repository service for remote-only branches
+  remain to be completed. `--no-fetch` does not perform remote HEAD discovery.
+- Forge identity resolves matching remotes, migrated origins and root-commit
+  existence; PR cache refreshes after configured-forge scans and explicit listing.
+  PR check/status aggregation, fully paginated detail files/reviews, GitHub search,
+  private-repository creation followed by host-side push, and structured per-operation
+  input/output schemas remain incomplete. No live forge mutations were validated.
+- CLI and ACP agent runs, events, cursor polling and cancel are implemented. Runs
+  currently use explicit prompts rather than task templates; ACP agents must support
+  `session/set_config_option` model selection. Events remain embedded JSON records.
+  Agent restart recovery, process-tree cancellation, model-adapter compatibility,
+  remote agent execution and separate event storage remain follow-up work.
+- UI action/description/classification jobs have ids and polling. MCP cleanup
+  currently waits for direct results. Daily scan scheduling is process-local;
+  durable daily deduplication and daily database backup are not yet implemented.
+- The default description command and optional Jev request/cache are present;
+  live description and Jev response validation/calibration have not been verified.
+- The minimal placeholder UI is intentionally English-only plain markup; full
+  theme/message abstractions belong to the subsequent UI implementation.
+
+These limitations are published so callers can build against the actual foundation
+without assuming unfinished destructive or forge workflows are available.
