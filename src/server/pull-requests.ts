@@ -119,7 +119,9 @@ export function normalizeDetail(
         ? "changes_requested"
         : states.includes("approved")
           ? "approved"
-          : states.length
+          : states.length ||
+              (Array.isArray(obj(raw).requested_reviewers) &&
+                (obj(raw).requested_reviewers as unknown[]).length)
             ? "review_required"
             : "none",
     body: str(obj(raw).body),
@@ -204,6 +206,8 @@ export async function getPullRequest(
         : pages(root + `/issues/${number}/comments`),
       pages(root + `/commits/${pr.headSha}/statuses`),
     ]);
+    if (!summaryOnly && forge.kind === "github")
+      comments.push(...(await pages(path + "/comments")));
     let checks: unknown[] = statuses;
     if (forge.kind === "github") {
       for (let page = 1; page <= 100; page++) {
