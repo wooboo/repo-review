@@ -121,6 +121,7 @@ export function executeExtra(
         "--git-dir=" + admin,
         "diff",
         "--cached",
+        "--ita-visible-in-index",
         "--quiet",
         "HEAD",
         "--",
