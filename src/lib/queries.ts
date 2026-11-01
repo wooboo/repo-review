@@ -1,4 +1,4 @@
-import { queryOptions, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useSyncExternalStore } from "react";
 import * as api from "@/lib/api/client";
 import type { AgentRunQuery, BranchHistoryQuery, LandingQuery, ListInput, LiveEvent, PlannedAction, PullRequestQuery, Verdict } from "@/lib/api/types";
@@ -60,24 +60,40 @@ export function usePoll(active: boolean): number | false {
   return active && live !== "sse" ? POLL_MS : false;
 }
 
-export function invalidateFor(client: QueryClient, event: LiveEvent) {
+/** Query key prefixes a live event invalidates. */
+export function keysFor(event: LiveEvent): string[][] {
   switch (event.type) {
     case "scan":
-      void client.invalidateQueries({ queryKey: ["scans"] });
-      void client.invalidateQueries({ queryKey: ["inv", "dashboard"] });
-      break;
+      return [["scans"], ["inv", "dashboard"]];
     case "inventory":
-      void client.invalidateQueries({ queryKey: ["inv"] });
-      void client.invalidateQueries({ queryKey: ["prs"] });
-      break;
+      return [["inv"], ["prs"], ["pr"]];
     case "job":
-      void client.invalidateQueries({ queryKey: ["job", event.id] });
-      break;
+      return [["job", event.id]];
     case "agent-run":
-      void client.invalidateQueries({ queryKey: ["runs"] });
-      void client.invalidateQueries({ queryKey: ["run", event.id] });
-      break;
+      return [["runs"], ["run", event.id]];
+    default:
+      return [];
   }
+}
+
+/**
+ * Coalesces live events: a sync job can emit one event per pull request, so invalidations are
+ * collected and flushed at most once per `delay` ms instead of refetching every view per event.
+ */
+export function coalescer(flush: (keys: string[][]) => void, delay = 1000, schedule: (f: () => void, ms: number) => unknown = setTimeout) {
+  const pending = new Map<string, string[]>();
+  let scheduled = false;
+  return (event: LiveEvent) => {
+    for (const key of keysFor(event)) pending.set(JSON.stringify(key), key);
+    if (scheduled || !pending.size) return;
+    scheduled = true;
+    schedule(() => {
+      scheduled = false;
+      const keys = [...pending.values()];
+      pending.clear();
+      flush(keys);
+    }, delay);
+  };
 }
 
 /** Mounted once in the shell: SSE invalidation hints from /api/events, 2 s polling when the stream fails. */
@@ -85,6 +101,7 @@ export function useLiveUpdates() {
   const client = useQueryClient();
   useEffect(() => {
     if (typeof EventSource === "undefined") return setMode("poll");
+    const push = coalescer((keys) => keys.forEach((queryKey) => void client.invalidateQueries({ queryKey })));
     const source = new EventSource("/api/events");
     source.onopen = () => {
       // Events are hints, not a replay log: refetch whatever changed while disconnected.
@@ -93,7 +110,7 @@ export function useLiveUpdates() {
     };
     source.onmessage = (e: MessageEvent<string>) => {
       try {
-        invalidateFor(client, JSON.parse(e.data) as LiveEvent);
+        push(JSON.parse(e.data) as LiveEvent);
       } catch {
         /* ignore malformed events */
       }

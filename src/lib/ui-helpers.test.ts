@@ -9,6 +9,7 @@ import { allPages, paginate } from "./api/pages";
 import { parseSearchWith } from "@tanstack/react-router";
 import { stringifySearch } from "./url";
 import { parseDiff } from "./diff";
+import { coalescer } from "./queries";
 
 describe("search params", () => {
   test("defaults for an empty URL", () => {
@@ -213,5 +214,23 @@ describe("diff parser", () => {
     expect(lines[2]).toEqual({ kind: "del", text: "old", old: 11, new: null });
     expect(lines[3]).toEqual({ kind: "add", text: "new", old: null, new: 11 });
     expect(lines.at(-1)).toEqual({ kind: "ctx", text: "tail", old: 12, new: 13 });
+  });
+});
+
+describe("live events", () => {
+  test("bursts are coalesced into one flush of distinct keys", () => {
+    const flushed: string[][][] = [];
+    const timers: (() => void)[] = [];
+    const push = coalescer((keys) => flushed.push(keys), 1000, (f) => timers.push(f));
+    for (let i = 0; i < 500; i++) push({ type: "inventory", id: `github.com/o/r!${i}` });
+    push({ type: "job", id: "j1" });
+    expect(timers).toHaveLength(1);
+    expect(flushed).toHaveLength(0);
+    timers[0]();
+    expect(flushed).toEqual([[["inv"], ["prs"], ["pr"], ["job", "j1"]]]);
+    push({ type: "scan", id: "s" });
+    expect(timers).toHaveLength(2);
+    timers[1]();
+    expect(flushed[1]).toEqual([["scans"], ["inv", "dashboard"]]);
   });
 });
