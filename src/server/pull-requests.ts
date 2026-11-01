@@ -91,6 +91,7 @@ export function normalizePullRequest(
         : p.state === "open"
           ? "open"
           : "closed",
+    mine: true,
     draft: Boolean(p.draft),
     head: recoverHeadBranch(p, history),
     headSha: str(head.sha),
@@ -352,6 +353,7 @@ export async function getPullRequest(
     );
     const detail = {
       ...normalized,
+      mine: app.db.pullRequestMine(pr.repo, pr.author),
       commits,
       commitCount: commits.length,
       mergeMethod:
@@ -409,6 +411,7 @@ async function sync(app: ApplicationApi, repo?: string, full = false) {
   const keys = [...new Set(clones.map((c) => c.key))].filter(
     (key) =>
       (!repo || key === repo) &&
+      (repo !== undefined || !app.db.repositoryFlags(key).muted) &&
       app.settings().forges.some((f) => key.startsWith(f.host + "/")),
   );
   const localBranches = new Set(
@@ -538,6 +541,7 @@ async function sync(app: ApplicationApi, repo?: string, full = false) {
         const state = checkState(b.p.checkState);
         const pr: PullRequest = {
           ...b.pr,
+          mine: app.db.pullRequestMine(b.pr.repo, b.pr.author),
           mergeMethod:
             b.pr.state === "merged"
               ? previous?.mergeMethod && previous.mergeMethod !== "unknown"

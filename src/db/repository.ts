@@ -1,3 +1,5 @@
+import { repositoryOwnership, loginIsMine } from "../domain/ownership";
+import type { Settings } from "../domain/model";
 import { DbError } from "../server/errors";
 import { Database } from "bun:sqlite";
 import {
@@ -68,7 +70,64 @@ export function openRepository(
     if (!t) throw Error("Unknown entity " + kind);
     return t;
   };
+  const config = () => api.get<Settings>("settings", "main")?.forges ?? [];
+  const muted = () => api.get<string[]>("settings", "muted-repositories") ?? [];
+  const visibility = (
+    kind: string,
+    input: { includeMuted?: boolean; mine?: boolean },
+  ) => {
+    const t = table(kind);
+    const host = sql`substr(${t.repo}, 1, instr(${t.repo}, '/') - 1)`;
+    const rest = sql`substr(${t.repo}, instr(${t.repo}, '/') + 1)`;
+    const owner = sql`substr(${rest}, 1, instr(${rest}, '/') - 1)`;
+    const login =
+      kind === "pull_request"
+        ? sql`coalesce(json_extract(${t.json}, '$.author'), '')`
+        : owner;
+    const owned = sql`NOT EXISTS (
+      SELECT 1 FROM json_each(${JSON.stringify(config())}) AS forge
+      WHERE lower(json_extract(forge.value, '$.host')) = lower(${host})
+        AND json_array_length(json_extract(forge.value, '$.owners')) > 0
+        AND NOT EXISTS (SELECT 1 FROM json_each(json_extract(forge.value, '$.owners')) AS owner
+                        WHERE lower(owner.value) = lower(${login}))
+        ${kind === "pull_request" ? sql`` : sql`AND ${host} <> 'local' AND ${owner} <> ''`}
+    )`;
+    return and(
+      input.includeMuted
+        ? undefined
+        : sql`${t.repo} NOT IN (SELECT value FROM json_each(${JSON.stringify(muted())}))`,
+      input.mine === undefined
+        ? undefined
+        : sql`(${owned}) = ${Number(input.mine)}`,
+    );
+  };
   const api = {
+    repositoryFlags(key: string) {
+      return {
+        ...repositoryOwnership(key, config()),
+        muted: muted().includes(key),
+      };
+    },
+    pullRequestMine(repo: string, author: string) {
+      return loginIsMine(
+        author,
+        config().find(
+          (f) => f.host.toLowerCase() === repo.split("/")[0].toLowerCase(),
+        ),
+      );
+    },
+    visibleList<T>(
+      kind: string,
+      input: { includeMuted?: boolean; mine?: boolean } = {},
+    ): T[] {
+      const t = table(kind);
+      return db
+        .select()
+        .from(t)
+        .where(and(like(t.id, kind + ":%"), visibility(kind, input)))
+        .all()
+        .map((r) => JSON.parse(r.json) as T);
+    },
     commits(id: string): import("../domain/model").PullRequestCommit[] {
       return sqlite
         .query(
@@ -119,6 +178,8 @@ export function openRepository(
         state?: string;
         text?: string;
         checks?: string;
+        includeMuted?: boolean;
+        mine?: boolean;
         page?: number;
         pageSize?: number;
       } = {},
@@ -128,6 +189,7 @@ export function openRepository(
         pageSize = Math.max(1, Math.min(200, Math.floor(input.pageSize ?? 50)));
       const where = and(
         like(t.id, kind + ":%"),
+        kind === "pull_request" ? visibility(kind, input) : undefined,
         input.repo ? eq(t.repo, input.repo) : undefined,
         input.status ? eq(t.status, input.status) : undefined,
         input.state && input.state !== "all"
