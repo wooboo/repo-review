@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readdirSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
+import { expand } from "./platform";
+export { expand };
 export const env = {
   ...process.env,
   GIT_OPTIONAL_LOCKS: "0",
@@ -34,8 +35,6 @@ export function out(path: string, ...args: string[]) {
   const r = git(path, ...args);
   return r.code === 0 ? r.out.trim() : "";
 }
-export const expand = (path: string) =>
-  path.startsWith("~/") ? join(homedir(), path.slice(2)) : resolve(path);
 export const operations = (dir: string) =>
   [
     "rebase-merge",

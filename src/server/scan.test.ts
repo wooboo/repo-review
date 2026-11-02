@@ -3,9 +3,11 @@ import { makeApplication } from "./application";
 import { collectRepo } from "../collector/analyze";
 import { git } from "../collector/git";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 test("host replacement is atomic and does not erase other hosts", () => {
   const app = makeApplication(":memory:");
-  const root = mkdtempSync("/tmp/review-ingest-");
+  const root = mkdtempSync(join(tmpdir(), "review-ingest-"));
   try {
     git(root, "init", "-b", "main");
     git(root, "config", "user.name", "Test");
@@ -29,7 +31,7 @@ test("host replacement is atomic and does not erase other hosts", () => {
 test("T3 project roots belong to one local host, not every local host", async () => {
   const { Database } = await import("bun:sqlite");
   const { mkdirSync } = await import("node:fs");
-  const root = mkdtempSync("/tmp/review-t3-host-");
+  const root = mkdtempSync(join(tmpdir(), "review-t3-host-"));
   const home = root + "/home",
     repo = root + "/project",
     empty = root + "/empty";

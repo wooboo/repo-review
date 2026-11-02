@@ -4,14 +4,23 @@ import {
   lstatSync,
   mkdirSync,
   writeFileSync,
-  rmSync,
   statSync,
   mkdtempSync,
 } from "node:fs";
-import { join, relative, isAbsolute, dirname } from "node:path";
+import { join, relative, isAbsolute, dirname, basename } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { git, run, expand, worktreeRows } from "./git";
+import {
+  isFilesystemRoot,
+  inUse,
+  processCwds,
+  removeTree,
+  shellQuote as quote,
+  tarCommand,
+  treeSize,
+  windows,
+} from "./platform";
 import { readThreads } from "./threads";
 import { activeStatus } from "../domain/logic";
 import type { CloneDeletionSummary } from "../domain/model";
@@ -33,13 +42,12 @@ const inside = (p: string, root: string) =>
 const canonical = (p: string): string =>
   existsSync(expand(p))
     ? realpathSync(expand(p))
-    : join(canonical(dirname(expand(p))), expand(p).split("/").at(-1)!);
+    : join(canonical(dirname(expand(p))), basename(expand(p)));
 const excluded = new Set(
   "node_modules .venv venv target dist build .next .nuxt .turbo .cache __pycache__ .gradle Pods DerivedData .direnv".split(
     " ",
   ),
 );
-const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
 export function executeCloneDeletion(
   item: WorkerAction,
   apply: boolean,
@@ -86,7 +94,7 @@ export function executeCloneDeletion(
     const repo = canonical(item.target.repo);
     const roots = config.roots.map(canonical);
     if (
-      repo === "/" ||
+      isFilesystemRoot(repo) ||
       repo === canonical(homedir()) ||
       roots.includes(repo) ||
       !roots.some((r) => inside(repo, r))
@@ -153,25 +161,9 @@ export function executeCloneDeletion(
       .map((t) => ({ id: t.id, title: t.title }));
     if (summary.activeThreads.length)
       throw Error("Active T3 thread on checkout");
-    let cwds = options.cwds;
-    if (!cwds) {
-      const r = run("lsof", [
-        "-nP",
-        "-a",
-        "-u",
-        String(process.getuid?.() ?? ""),
-        "-d",
-        "cwd",
-        "-Fn",
-      ]);
-      if (r.code !== 0 && r.code !== 1)
-        throw Error("Cannot verify process working directories");
-      cwds = r.out
-        .split("\n")
-        .filter((l) => l.startsWith("n/"))
-        .map((l) => l.slice(1));
-    }
-    if (cwds.some((p) => matches(canonical(p))))
+    const cwds = options.cwds ?? processCwds();
+    if (!cwds) throw Error("Cannot verify process working directories");
+    if (cwds.some((p) => matches(canonical(p))) || paths.some(inUse))
       throw Error("Process working directory inside checkout");
     const files: {
       path: string;
@@ -284,15 +276,23 @@ export function executeCloneDeletion(
       if (ahead && (upstream || !integrated))
         summary.unpushedBranches.push({ name, ahead, integrated });
     }
-    const du = run("du", [
-      "-sk",
-      ...paths.filter((p) => existsSync(p) && (p === repo || !inside(p, repo))),
-    ]);
-    if (!du.code)
-      summary.sizeBytes = du.out
-        .trim()
-        .split("\n")
-        .reduce((n, l) => n + Number(l.split(/\s/)[0]) * 1024, 0);
+    const measured = paths.filter(
+      (p) => existsSync(p) && (p === repo || !inside(p, repo)),
+    );
+    if (windows)
+      try {
+        summary.sizeBytes = measured.reduce((n, p) => n + treeSize(p), 0);
+      } catch {
+        /* size is informational */
+      }
+    else {
+      const du = run("du", ["-sk", ...measured]);
+      if (!du.code)
+        summary.sizeBytes = du.out
+          .trim()
+          .split("\n")
+          .reduce((n, l) => n + Number(l.split(/\s/)[0]) * 1024, 0);
+    }
     if (!apply) return result();
     // Unique action suffix avoids collisions for several clones on one host.
     const archive = join(
@@ -339,7 +339,7 @@ export function executeCloneDeletion(
         checked(tmp, "bundle", "verify", bundle);
         verify(bundle);
       } finally {
-        rmSync(tmp, { recursive: true, force: true });
+        removeTree(tmp);
       }
     }
     mkdirSync(join(archive, "worktrees"), { mode: 0o700 });
@@ -348,7 +348,7 @@ export function executeCloneDeletion(
       const tar = join(archive, "worktrees", i + ".tar.gz");
       // NUL lists preserve whitespace, newlines, and leading dashes in paths.
       const r = run(
-        "tar",
+        tarCommand,
         ["-czf", tar, "-C", f.path, "--null", "-T", "-"],
         f.files.join("\0") + (f.files.length ? "\0" : ""),
       );
@@ -429,8 +429,8 @@ export function executeCloneDeletion(
     if (now !== fingerprint)
       throw Error("Clone fingerprint changed during archive");
     for (const p of paths.filter((p) => p !== repo && !inside(p, repo)))
-      rmSync(p, { recursive: true, force: true });
-    rmSync(repo, { recursive: true });
+      removeTree(p);
+    removeTree(repo);
     config.archivePath = archive;
     item = {
       ...item,

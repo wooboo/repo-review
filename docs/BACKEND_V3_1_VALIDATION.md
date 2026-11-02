@@ -15,17 +15,9 @@ All collected repositories with a configured forge were included. No forge PR wa
 created, merged, closed or commented during verification, and no action was applied
 to a real repository. Git provenance reads disabled implicit lazy fetching.
 
-The sync processed 567 PRs with 150 HTTP requests total: 79 GitHub GraphQL requests
-and 71 other requests (including REST budget probes and Forgejo). The hard ceiling
-was 280 requests. `gh api rate_limit` immediately before and after reported:
-
-| Budget | Before remaining | After remaining | Observed decrease |
-|---|---:|---:|---:|
-| GitHub REST core | 4,993 | 4,987 | 6 |
-| GitHub GraphQL | 4,997 | 4,980 | 17 |
-
-These are observed remaining-budget deltas around the sync; HTTP counts were
-instrumented at the application's fetch boundary. Both budgets stayed well above
+HTTP requests were counted at the application's fetch boundary and stayed well
+below the hard ceiling of 280 requests. `gh api rate_limit` before and after the
+sync showed only small decreases in the GitHub REST and GraphQL budgets, well above
 the default reserve. No second live sync was run.
 
 A metadata node from public PR #5 was retained as

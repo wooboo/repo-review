@@ -3,15 +3,13 @@ import { AgentError } from "./errors";
 import { spawn } from "node:child_process";
 import { Readable, Writable } from "node:stream";
 import { mkdir, realpath } from "node:fs/promises";
-import { join, resolve, relative } from "node:path";
+import { join, resolve, relative, isAbsolute, sep } from "node:path";
 import {
   client,
   ndJsonStream,
   PROTOCOL_VERSION,
 } from "@agentclientprotocol/sdk";
-import { homedir } from "node:os";
-const expand = (p: string) =>
-  p.startsWith("~/") ? join(homedir(), p.slice(2)) : resolve(p);
+import { expand, killTree as killProcessTree } from "../collector/platform";
 async function git(path: string, ...args: string[]) {
   const p = Bun.spawn(["git", "-C", path, ...args], {
     stdout: "pipe",
@@ -270,12 +268,12 @@ export async function startRun(app: ApplicationApi, input: AgentRunInput) {
     detached: process.platform !== "win32",
   });
   p.stdin.on("error", () => {});
-  const killTree = (signal: NodeJS.Signals) => {
-    try {
-      if (p.pid && process.platform !== "win32") process.kill(-p.pid, signal);
-      else p.kill(signal);
-    } catch {}
-  };
+  const killTree = (signal: "SIGTERM" | "SIGKILL") =>
+    killProcessTree(p.pid, signal, () => {
+      try {
+        p.kill(signal);
+      } catch {}
+    });
   let cancelled = false;
   live.set(id, () => {
     cancelled = true;
@@ -336,7 +334,9 @@ export async function startRun(app: ApplicationApi, input: AgentRunInput) {
               const inside = locations.every((l) => {
                 const rel = relative(cwd, resolve(cwd, l.path));
                 return (
-                  rel !== ".." && !rel.startsWith("../") && !rel.startsWith("/")
+                  rel !== ".." &&
+                  !rel.startsWith(".." + sep) &&
+                  !isAbsolute(rel)
                 );
               });
               const choice = inside

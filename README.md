@@ -1,14 +1,19 @@
 # repo-review
 
-Self-hosted inventory of repositories, branches and worktrees across local and SSH
-hosts. Backend foundation with a minimal repository-list page. The full product
-specification is in [docs/SPEC.md](docs/SPEC.md); the UI contract and current
-limitations are in [docs/API.md](docs/API.md).
+Self-hosted, mobile-first web app for keeping many Git repositories, branches and
+worktrees in order across local and SSH hosts. It scans the configured hosts, shows
+what is merged, stale, unpushed or dirty, safely deletes what can be deleted, handles
+pull requests, and hands work to AI coding agents. Agents can drive all of it through
+an MCP server.
+
+The full product specification is in [docs/SPEC.md](docs/SPEC.md); the UI contract
+and current limitations are in [docs/API.md](docs/API.md).
 
 ## Run
 
-Requires Bun 1.4+, Git, SSH, and `lsof` on scanned hosts. Use a native Bun build
-compatible with native addons on the server.
+Requires Bun 1.4+, Git, SSH, and `lsof` on scanned POSIX hosts. Use a native Bun
+build compatible with native addons on the server. Linux and macOS are tested;
+Windows is supported on a best-effort basis (see [Windows](#windows)).
 
 ```sh
 bun install
@@ -97,6 +102,29 @@ after completion for inspection. Optional `TYPESAFE_API_KEY` enables Jev branch
 classification. Descriptions use a tool-free Claude Haiku invocation and are
 cached by content fingerprint.
 
+## Windows
+
+The server and the local host can run on Windows 10 or later. Windows support is
+written but not covered by automated tests; please report problems.
+
+- Install [Bun](https://bun.sh), [Git for Windows](https://git-scm.com) and the
+  built-in OpenSSH client, and run the commands above from PowerShell.
+- Set environment variables in PowerShell, for example
+  `$env:DATABASE_PATH = "C:\repo-review\review.db"; $env:PORT = 3000; bun run start`.
+- `~/` in roots and directories expands to your user profile, and `~\` works too.
+- Windows cannot list other processes' working directories, so instead of `lsof`
+  the cleanup checks briefly rename each worktree and rename it back. Windows
+  refuses the rename while any program has a folder or file inside open, and the
+  item is then skipped as in use. Antivirus or indexing can cause the same
+  refusal; retry later.
+- Clone archives use the `tar.exe` that ships with Windows.
+- Token commands (`tokenCommand`, the Jev key command) run through `cmd.exe`.
+- Agent and `claude` commands must be real executables (`.exe`), not `.cmd` or
+  `.bat` wrappers such as `npx.cmd`. Use `bunx` or the native Claude installer.
+- Restore commands shown after deletions use PowerShell quoting.
+- SSH hosts must still be Linux or macOS: the remote side runs POSIX shell
+  commands.
+
 ## MCP
 
 ```sh
@@ -112,3 +140,9 @@ Destructive operations follow plan → review → apply. Development tests use o
 temporary repositories, including a temporary bare archive remote. Never test
 apply against live repositories. See [docs/VALIDATION.md](docs/VALIDATION.md) for
 executed gates and known gaps.
+
+## License
+
+[MIT](LICENSE). Use, copy, modify, publish, sell or distribute it for any purpose;
+keep the copyright and license notice. Third-party dependencies keep their own
+licenses.
