@@ -1,9 +1,13 @@
 # repo-review
 
-Self-hosted inventory of repositories, branches and worktrees across local and SSH
-hosts. Backend foundation with a minimal repository-list page. The full product
-specification is in [docs/SPEC.md](docs/SPEC.md); the UI contract and current
-limitations are in [docs/API.md](docs/API.md).
+Self-hosted, mobile-first web app for keeping many Git repositories, branches and
+worktrees in order across local and SSH hosts. It scans the configured hosts, shows
+what is merged, stale, unpushed or dirty, safely deletes what can be deleted, handles
+pull requests, and hands work to AI coding agents. Agents can drive all of it through
+an MCP server.
+
+The full product specification is in [docs/SPEC.md](docs/SPEC.md); the UI contract
+and current limitations are in [docs/API.md](docs/API.md).
 
 ## Run
 
@@ -112,3 +116,9 @@ Destructive operations follow plan → review → apply. Development tests use o
 temporary repositories, including a temporary bare archive remote. Never test
 apply against live repositories. See [docs/VALIDATION.md](docs/VALIDATION.md) for
 executed gates and known gaps.
+
+## License
+
+[MIT](LICENSE). Use, copy, modify, publish, sell or distribute it for any purpose;
+keep the copyright and license notice. Third-party dependencies keep their own
+licenses.
