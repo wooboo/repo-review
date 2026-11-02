@@ -56,6 +56,31 @@ collector can run directly as `bun src/collector/main.ts --host local --root ~/W
 T3 state is optional for collection and database access runs in a timed subprocess.
 Cleanup fails closed when activity cannot be verified.
 
+Scans log stages, repository completion counts and durations to the server
+terminal (stderr for a standalone collector). Every 10 seconds while a repository
+is running, a log names its current Git command; commands taking at least one
+second also report their duration. Progress events are saved in the scan history,
+including timeout diagnostics. Identity resolution and pull-request sync stages
+are logged after collection too.
+
+Completed repository results are atomically checkpointed on the scanned host in
+`~/.cache/repo-review/scan-<hash>.json` with results in the adjacent `.json.repos`
+directory (on Windows, under the user profile).
+A subsequent scan with the same host, repositories and fetch/T3 options resumes
+an interrupted scan, reusing completed results for up to 24 hours and reading T3
+activity again. Reused Git results reflect the original collection time. Successful
+collection removes the checkpoint; scans with errors retain it so failed
+repositories can be retried. Inventory replacement still waits for the final host
+snapshot. Checkpoints are local files and contain repository metadata and file
+names; they are not uploaded independently.
+
+Standalone collector options: `--no-resume` starts fresh, `--checkpoint <path>`
+selects the checkpoint file, `--repo-timeout-ms <milliseconds>` changes the default
+10-minute repository budget, and `--jobs <count>` changes concurrency (default 4).
+A repository timeout terminates its worker and records an error rather than
+waiting for the one-hour host limit. `--no-fetch` also skips network probes for
+remote default branches.
+
 Example forge configuration:
 
 ```json

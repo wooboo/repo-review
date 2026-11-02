@@ -137,7 +137,8 @@ export function analyzeBranch(
         .split("\n")
         .filter(Boolean)
     : [];
-  const cherryLines = base ? out(path, "cherry", base, sha).split("\n") : [];
+  const cherry = base ? git(path, "cherry", base, sha) : { code: 1, out: "" };
+  const cherryLines = cherry.code === 0 ? cherry.out.split("\n") : [];
   const upstreamCounts = upstream
     ? out(path, "rev-list", "--left-right", "--count", `${sha}...${upstream}`)
         .split(/\s+/)
@@ -229,7 +230,6 @@ export function analyzeBranch(
   a.diffstat = mergeBase
     ? out(path, "diff", "--shortstat", mergeBase, sha)
     : "";
-  const cherry = git(path, "cherry", base, sha);
   if (
     !cherry.code &&
     cherry.out.includes("-") &&
@@ -320,7 +320,7 @@ export function collectRepo(
         "--quiet",
         `refs/remotes/${name}/HEAD`,
       ).replace(`refs/remotes/${name}/`, "");
-      if (!defaultBranch)
+      if (!defaultBranch && fetch)
         defaultBranch =
           out(sample, "ls-remote", "--symref", name, "HEAD").match(
             /ref: refs\/heads\/(.+)\tHEAD/,

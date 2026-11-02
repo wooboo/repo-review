@@ -238,3 +238,24 @@ test("multiple verdicts and Jev recommendation filter precede branch paging", as
     await app.close();
   }
 });
+
+test("offline collection never probes remotes, and branch analysis reuses cherry results", async () => {
+  const { observeCommands } = await import("./git");
+  const p = fixture();
+  git(p, "remote", "add", "origin", "https://example.invalid/repository.git");
+  git(p, "checkout", "-b", "feature");
+  commit(p, "feature", "feature\n");
+  const commands: string[][] = [];
+  observeCommands((event) => {
+    if (event.phase === "start") commands.push(event.args);
+  });
+  try {
+    const c = collectRepo(join(p, ".git"), p, false);
+    expect(c.branches.find((b) => b.name === "feature")?.state).toBe("unmerged");
+    expect(commands.some((args) => args.includes("ls-remote") || args.includes("fetch"))).toBe(false);
+    // One cherry comparison per local branch (main and feature), none repeated.
+    expect(commands.filter((args) => args.includes("cherry"))).toHaveLength(2);
+  } finally {
+    observeCommands(undefined);
+  }
+});

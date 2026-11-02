@@ -541,14 +541,23 @@ export function makeApplication(path?: string) {
                   },
                 );
                 if (!snapshot) throw Error("Host returned no snapshot");
+                const phase = (name: string, repo?: string) => {
+                  const event = { type: "scan-phase", host: host.id, phase: name, repo: repo ?? "", at: new Date().toISOString() };
+                  console.info(`[scan ${host.id}] ${JSON.stringify(event)}`);
+                  job.events.push(event);
+                  persist();
+                };
+                phase("resolve-identities");
                 const forge = api.forge();
                 const resolved = [];
                 for (const c of snapshot.repositories) {
+                  phase("resolve-identity", c.key);
                   const identity = await forge.resolveIdentity(c);
                   resolved.push({ ...c, key: identity.key, identity });
                 }
                 db.replaceHost(host.id, resolved);
-                for (const key of new Set(resolved.map((c) => c.key)))
+                for (const key of new Set(resolved.map((c) => c.key))) {
+                  phase("pull-requests", key);
                   if (
                     !db.repositoryFlags(key).muted &&
                     settings().forges.some((f) => key.startsWith(f.host + "/"))
@@ -579,6 +588,8 @@ export function makeApplication(path?: string) {
                       await rebuildProvenance(api, key);
                     }
                   } else await rebuildProvenance(api, key);
+                }
+                phase("host-complete");
                 job.events.push({
                   type: "host-complete",
                   host: host.id,
@@ -587,6 +598,7 @@ export function makeApplication(path?: string) {
                 });
                 persist();
               } catch (e) {
+                console.error(`[scan ${host.id}] failed: ${String(e)}`);
                 job.errors.push(String(e));
                 persist();
               }

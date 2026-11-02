@@ -10,12 +10,25 @@ export const env = {
   LC_ALL: "C",
   GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o ConnectTimeout=15",
 };
+export type CommandTiming = {
+  command: string;
+  args: string[];
+  phase: "start" | "finish";
+  elapsedMs: number;
+  code?: number;
+};
+let observer: ((event: CommandTiming) => void) | undefined;
+export function observeCommands(callback: typeof observer) {
+  observer = callback;
+}
 export function run(
   command: string,
   args: string[],
   input?: string,
   timeout = 120000,
 ) {
+  const started = performance.now();
+  observer?.({ command, args, phase: "start", elapsedMs: 0 });
   const r = spawnSync(command, args, {
     env,
     encoding: "utf8",
@@ -23,6 +36,9 @@ export function run(
     timeout,
     maxBuffer: 64 * 1024 * 1024,
   });
+  observer?.({ command, args, phase: "finish", elapsedMs: Math.round(performance.now() - started), code: r.status ?? 125 });
+  // A timed-out command cannot safely supply partial data to a cleanup scan.
+  if (observer && r.error) throw r.error;
   return {
     code: r.status ?? 125,
     out: r.stdout ?? "",
