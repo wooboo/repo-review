@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "bun scripts/build-collector.ts && bun --bun vite dev --port 3000",
     "generate-routes": "tsr generate",
-    "build": "bun scripts/build-collector.ts && bun --bun vite build && cp -r src/db/migrations .output/server/migrations",
+    "build": "bun scripts/build-collector.ts && bun --bun vite build && bun scripts/copy-migrations.ts",
     "preview": "vite preview",
     "start": "bun .output/server/index.mjs",
     "test": "bun test",

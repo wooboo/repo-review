@@ -1,3 +1,4 @@
+import { shellCommand } from "../collector/platform";
 import type { Settings, SettingsView } from "../domain/model";
 const cache = new Map<string, { until: number; value: Promise<string> }>();
 export async function resolveJevKey(
@@ -13,7 +14,8 @@ export async function resolveJevKey(
         until: Date.now() + 60_000,
         value: (async () => {
           try {
-            const p = Bun.spawn(["sh", "-c", command], {
+            const p = Bun.spawn(shellCommand(command), {
+              windowsVerbatimArguments: true,
               stdout: "pipe",
               stderr: "ignore",
             });

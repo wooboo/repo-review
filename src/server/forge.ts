@@ -1,3 +1,4 @@
+import { shellCommand } from "../collector/platform";
 import { ForgeUnavailable, ForgeRejected, NotFound } from "./pull-requests";
 const tokenCache = new Map<string, { until: number; value: Promise<string> }>();
 async function commandToken(host: string, command: string) {
@@ -5,7 +6,8 @@ async function commandToken(host: string, command: string) {
     cached = tokenCache.get(key);
   if (cached && cached.until > Date.now()) return cached.value;
   const value = (async () => {
-    const p = Bun.spawn(["sh", "-c", command], {
+    const p = Bun.spawn(shellCommand(command), {
+      windowsVerbatimArguments: true,
       stdout: "pipe",
       stderr: "pipe",
     });

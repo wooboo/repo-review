@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { Action, PlannedAction } from "../domain/model";
 import { git, out, operations, worktreeRows, run } from "./git";
+import { inUse, processCwds, within } from "./platform";
 import { worktree } from "./analyze";
 import { readThreads } from "./threads";
 import { activeStatus } from "../domain/logic";
@@ -52,24 +53,8 @@ export function executeExtra(
       )
     )
       return result("blocked", "Active thread");
-    let cwds = options.cwds;
-    if (!cwds) {
-      const r = run("lsof", [
-        "-nP",
-        "-a",
-        "-u",
-        String(process.getuid?.() ?? ""),
-        "-d",
-        "cwd",
-        "-Fn",
-      ]);
-      if (r.code !== 0 && r.code !== 1)
-        return result("blocked", "Cannot verify processes");
-      cwds = r.out
-        .split("\n")
-        .filter((l) => l.startsWith("n/"))
-        .map((l) => l.slice(1));
-    }
+    const cwds = options.cwds ?? processCwds();
+    if (!cwds) return result("blocked", "Cannot verify processes");
     const rows = worktreeRows(repo);
     const clean = (path: string) => {
       const row = rows.find((r) => r.worktree === path);
@@ -85,7 +70,7 @@ export function executeExtra(
         throw Error("Worktree missing, dirty, locked or in operation");
       const canonical = realpathSync(path);
       const used = [
-        ...cwds!,
+        ...cwds,
         ...active.flatMap((t) => [t.worktree ?? "", t.projectRoot ?? ""]),
       ]
         .filter(Boolean)
@@ -96,7 +81,7 @@ export function executeExtra(
             return p;
           }
         });
-      if (used.some((p) => p === canonical || p.startsWith(canonical + "/")))
+      if (used.some((p) => within(p, canonical)) || inUse(canonical))
         throw Error("Worktree used by a process");
     };
     if (

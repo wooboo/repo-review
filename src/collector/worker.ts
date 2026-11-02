@@ -3,9 +3,9 @@ import { realpathSync } from "node:fs";
 import type { Action, ActionResult } from "../domain/model";
 import { activeStatus, integrated } from "../domain/logic";
 import { analyzeBranch, worktree } from "./analyze";
-import { git, out, run, worktreeRows } from "./git";
+import { git, out, worktreeRows } from "./git";
+import { inUse, processCwds, shellQuote as quote, within } from "./platform";
 import { readThreads } from "./threads";
-const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
 export function execute(
   item: Action,
   apply: boolean,
@@ -33,24 +33,9 @@ export function execute(
       options.activeBranches?.includes(item.branch)
     )
       return result("skipped", "Branch recorded on active thread");
-    let cwds = options.cwds;
-    if (!cwds) {
-      const r = run("lsof", [
-        "-nP",
-        "-a",
-        "-u",
-        String(process.getuid?.() ?? ""),
-        "-d",
-        "cwd",
-        "-Fn",
-      ]);
-      if (r.code !== 0 && r.code !== 1)
-        return result("blocked", "Cannot verify process working directories");
-      cwds = r.out
-        .split("\n")
-        .filter((l) => l.startsWith("n/"))
-        .map((l) => l.slice(1));
-    }
+    const cwds = options.cwds ?? processCwds();
+    if (!cwds)
+      return result("blocked", "Cannot verify process working directories");
     const ref = "refs/heads/" + item.branch;
     if (!out(item.repo, "rev-parse", "--verify", ref))
       return result("skipped", "Branch no longer exists");
@@ -111,7 +96,8 @@ export function execute(
           ...cwds,
           ...active.map((t) => t.worktree ?? ""),
           ...(options.activePaths ?? []),
-        ].some((x) => x === p || x.startsWith(p + "/"))
+        ].some((x) => x && within(x, p)) ||
+        inUse(p)
       )
         return result("skipped", "Worktree used by process or agent");
     }
